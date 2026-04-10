@@ -1,33 +1,79 @@
 # Delivery Management Backend
 
-NestJS backend scaffold for the Delivery Management System. This step includes the project foundation only:
+NestJS backend for the Delivery Management System with Google login, JWT auth, RBAC, Prisma/MySQL persistence, Swagger docs, and the core workload/delivery modules implemented.
 
-- NestJS application structure
-- Prisma configured for MySQL
-- Initial RBAC schema and migration
-- Seed data for admin, teams, roles, and permissions
-- Docker Compose for local MySQL
-- Swagger, config loading, and validation baseline
+## Implemented Modules
 
-Business modules such as requests, projects, allocations, incidents, artifacts, and leaves are intentionally not implemented yet.
+- Auth
+- Users
+- Teams
+- Roles
+- Permissions
+- Requests
+- Projects
+- Project Allocations
+- Incidents
+- Project Artifacts
+- Member Leaves
 
 ## Tech Stack
 
 - Node.js 20+
 - NestJS 10
-- Prisma
+- Prisma ORM
 - MySQL 8
 - Swagger / OpenAPI
+- class-validator
+
+## API Conventions
+
+- Base prefix: `/api`
+- Swagger UI: `/api/docs`
+- Success responses are wrapped as:
+
+```json
+{
+  "success": true,
+  "message": "Request completed successfully.",
+  "data": {},
+  "timestamp": "2026-04-10T10:00:00.000Z",
+  "path": "/api/example"
+}
+```
+
+- Error responses are wrapped as:
+
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "error": "Bad Request",
+  "details": [],
+  "timestamp": "2026-04-10T10:00:00.000Z",
+  "path": "/api/example"
+}
+```
 
 ## Project Structure
 
 ```text
 src/
+  common/
+    filters/
+    interceptors/
+    interfaces/
+    swagger/
   config/
   modules/
     auth/
+    incidents/
+    member-leaves/
     permissions/
     prisma/
+    project-allocations/
+    project-artifacts/
+    projects/
+    requests/
     roles/
     teams/
     users/
@@ -70,30 +116,36 @@ npm run prisma:generate
 npm run prisma:deploy
 ```
 
-For local development, you can also use:
+For local iterative development:
 
 ```bash
 npm run prisma:migrate
 ```
 
-6. Seed initial data:
+6. Seed the database:
 
 ```bash
 npm run prisma:seed
 ```
 
-7. Start the app:
+7. Start the API:
 
 ```bash
 npm run start:dev
 ```
 
-## Default Seed Data
+## Seed Data
 
-- Admin user: `admin@example.com`
+The seed script creates:
+
+- Teams: `Administration`, `Engineering`, `Project Management`
+- Users:
+  - `admin@example.com`
+  - `pm@example.com`
+  - `dev@example.com`
 - Roles: `admin`, `pm`, `dev`
-- Sample teams: `Administration`, `Engineering`
-- Permissions: module/action permissions for:
+- Permissions for:
+  - `teams`
   - `requests`
   - `projects`
   - `allocations`
@@ -103,8 +155,15 @@ npm run start:dev
   - `users`
   - `roles`
   - `permissions`
+- Sample domain data:
+  - 1 request
+  - 1 project
+  - 1 project allocation
+  - 1 incident
+  - 1 project artifact
+  - 1 member leave
 
-Each module gets these actions:
+Each permission module includes:
 
 - `view`
 - `create`
@@ -112,11 +171,38 @@ Each module gets these actions:
 - `delete`
 - `manage`
 
-## Available Commands
+## Main Endpoints
+
+- Auth:
+  - `POST /api/auth/google`
+  - `GET /api/auth/me`
+- RBAC:
+  - `GET /api/users`
+  - `PATCH /api/users/:id/roles`
+  - `GET /api/roles`
+  - `POST /api/roles`
+  - `PATCH /api/roles/:id`
+  - `PATCH /api/roles/:id/permissions`
+  - `GET /api/permissions`
+- Requests / Projects:
+  - `GET /api/requests`
+  - `POST /api/requests/:id/convert-to-project`
+  - `GET /api/projects`
+- Workload Tracking:
+  - `GET /api/project-allocations`
+  - `GET /api/project-allocations/workload/member/:memberId`
+  - `GET /api/project-allocations/utilization/team/:teamId`
+- Operations:
+  - `GET /api/incidents`
+  - `GET /api/project-artifacts`
+  - `GET /api/member-leaves`
+
+## Commands
 
 ```bash
 npm run start:dev
 npm run build
+npm run lint
 npm run test
 npm run test:e2e
 npm run prisma:generate
@@ -127,6 +213,8 @@ npm run prisma:seed
 
 ## Notes
 
-- `POST /api/auth/google` and related auth endpoints are scaffolded only, not implemented yet.
-- CRUD endpoints for users, teams, roles, and permissions are placeholders to preserve module structure for later implementation.
-- Swagger UI will be available at `/api/docs`.
+- Google login expects a Google ID token posted to `POST /api/auth/google`.
+- Allowed Google email domains are controlled by `ALLOWED_GOOGLE_DOMAINS` in `.env`.
+- RBAC is enforced through `@RequirePermission(...)` plus the shared JWT + permissions guards.
+- Request validation is applied globally with Nest `ValidationPipe`.
+- Database migrations are committed under `prisma/migrations/`.

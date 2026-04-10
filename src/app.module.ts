@@ -6,8 +6,11 @@ import envValidation from './config/env.validation';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
+import { IncidentsModule } from './modules/incidents/incidents.module';
+import { MemberLeavesModule } from './modules/member-leaves/member-leaves.module';
 import { PermissionsModule } from './modules/permissions/permissions.module';
 import { ProjectAllocationsModule } from './modules/project-allocations/project-allocations.module';
+import { ProjectArtifactsModule } from './modules/project-artifacts/project-artifacts.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { RolesModule } from './modules/roles/roles.module';
@@ -26,7 +29,10 @@ import { UsersModule } from './modules/users/users.module';
     }),
     PrismaModule,
     AuthModule,
+    IncidentsModule,
+    MemberLeavesModule,
     ProjectAllocationsModule,
+    ProjectArtifactsModule,
     UsersModule,
     TeamsModule,
     RolesModule,

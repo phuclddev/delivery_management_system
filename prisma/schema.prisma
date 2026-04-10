@@ -22,6 +22,9 @@ model User {
   userRoles     UserRole[]
   ownedProjects Project[]  @relation("ProjectPmOwner")
   allocations   ProjectAllocation[]
+  ownedIncidents Incident[] @relation("IncidentOwner")
+  uploadedArtifacts ProjectArtifact[] @relation("ArtifactUploader")
+  memberLeaves MemberLeave[]
 
   @@map("users")
 }
@@ -158,6 +161,8 @@ model Project {
   requesterTeam       Team      @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
   pmOwner             User?     @relation("ProjectPmOwner", fields: [pmOwnerId], references: [id], onDelete: SetNull)
   allocations         ProjectAllocation[]
+  incidents           Incident[]
+  artifacts           ProjectArtifact[]
 
   @@index([requesterTeamId])
   @@index([pmOwnerId])
@@ -188,6 +193,71 @@ model ProjectAllocation {
   @@index([projectId])
   @@index([startDate, endDate])
   @@map("project_allocations")
+}
+
+model Incident {
+  id                String    @id @default(cuid())
+  incidentCode      String    @unique @map("incident_code")
+  projectId         String    @map("project_id")
+  foundAt           DateTime  @map("found_at")
+  severity          String
+  domain            String
+  impactDescription String    @map("impact_description") @db.LongText
+  resolvers         String?   @db.LongText
+  background        String?   @db.LongText
+  solution          String?   @db.LongText
+  processingMinutes Int?      @map("processing_minutes")
+  tag               String?
+  status            String
+  ownerMemberId     String?   @map("owner_member_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ownerMember       User?     @relation("IncidentOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([foundAt])
+  @@index([severity])
+  @@index([status])
+  @@index([ownerMemberId])
+  @@map("incidents")
+}
+
+model ProjectArtifact {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  artifactType String  @map("artifact_type")
+  title       String
+  contentText String?  @map("content_text") @db.LongText
+  fileUrl     String?  @map("file_url")
+  mimeType    String?  @map("mime_type")
+  uploadedBy  String?  @map("uploaded_by")
+  isFinal     Boolean  @default(false) @map("is_final")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploader    User?    @relation("ArtifactUploader", fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([artifactType])
+  @@index([uploadedBy])
+  @@map("project_artifacts")
+}
+
+model MemberLeave {
+  id        String   @id @default(cuid())
+  memberId  String   @map("member_id")
+  leaveType String   @map("leave_type")
+  startDate DateTime @map("start_date")
+  endDate   DateTime @map("end_date")
+  note      String?  @db.LongText
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  member    User     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@index([startDate, endDate])
+  @@map("member_leaves")
 }
 
 enum UserStatus {

@@ -2,6 +2,8 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { AppModule } from './app.module';
 
 async function bootstrap(): Promise<void> {
@@ -23,10 +25,14 @@ async function bootstrap(): Promise<void> {
       },
     }),
   );
+  app.useGlobalInterceptors(new ResponseInterceptor());
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle(appName)
-    .setDescription('Delivery Management System API')
+    .setDescription(
+      'Delivery Management System API with Google auth, RBAC, workload tracking, and delivery operations modules.',
+    )
     .setVersion('0.1.0')
     .addBearerAuth()
     .build();
@@ -38,4 +44,3 @@ async function bootstrap(): Promise<void> {
 }
 
 void bootstrap();
-
