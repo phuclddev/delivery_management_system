@@ -20,6 +20,7 @@ model User {
   updatedAt     DateTime   @updatedAt @map("updated_at")
   team          Team?      @relation(fields: [teamId], references: [id], onDelete: SetNull)
   userRoles     UserRole[]
+  ownedProjects Project[]  @relation("ProjectPmOwner")
 
   @@map("users")
 }
@@ -32,6 +33,8 @@ model Team {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
   users       User[]
+  requests    Request[]
+  projects    Project[]
 
   @@map("teams")
 }
@@ -88,8 +91,80 @@ model RolePermission {
   @@map("role_permissions")
 }
 
+model Request {
+  id                 String    @id @default(cuid())
+  requestCode        String    @unique @map("request_code")
+  title              String
+  requesterTeamId    String    @map("requester_team_id")
+  campaignName       String?   @map("campaign_name")
+  requestType        String    @map("request_type")
+  scopeType          String    @map("scope_type")
+  priority           String
+  desiredLiveDate    DateTime? @map("desired_live_date")
+  brief              String?   @db.LongText
+  status             String
+  backendStartDate   DateTime? @map("backend_start_date")
+  backendEndDate     DateTime? @map("backend_end_date")
+  frontendStartDate  DateTime? @map("frontend_start_date")
+  frontendEndDate    DateTime? @map("frontend_end_date")
+  businessValueScore Int?      @map("business_value_score")
+  userImpactScore    Int?      @map("user_impact_score")
+  urgencyScore       Int?      @map("urgency_score")
+  valueNote          String?   @map("value_note") @db.LongText
+  comment            String?   @db.LongText
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  requesterTeam      Team      @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
+  project            Project?
+
+  @@index([requesterTeamId])
+  @@index([status])
+  @@index([priority])
+  @@map("requests")
+}
+
+model Project {
+  id                  String    @id @default(cuid())
+  projectCode         String    @unique @map("project_code")
+  requestId           String?   @unique @map("request_id")
+  name                String
+  requesterTeamId     String    @map("requester_team_id")
+  pmOwnerId           String?   @map("pm_owner_id")
+  projectType         String    @map("project_type")
+  scopeType           String    @map("scope_type")
+  status              String
+  businessPriority    String    @map("business_priority")
+  riskLevel           String?   @map("risk_level")
+  requestedLiveDate   DateTime? @map("requested_live_date")
+  plannedStartDate    DateTime? @map("planned_start_date")
+  plannedLiveDate     DateTime? @map("planned_live_date")
+  actualStartDate     DateTime? @map("actual_start_date")
+  actualLiveDate      DateTime? @map("actual_live_date")
+  backendStartDate    DateTime? @map("backend_start_date")
+  backendEndDate      DateTime? @map("backend_end_date")
+  frontendStartDate   DateTime? @map("frontend_start_date")
+  frontendEndDate     DateTime? @map("frontend_end_date")
+  currentScopeVersion String?   @map("current_scope_version")
+  scopeChangeCount    Int       @default(0) @map("scope_change_count")
+  blockerCount        Int       @default(0) @map("blocker_count")
+  incidentCount       Int       @default(0) @map("incident_count")
+  chatGroupUrl        String?   @map("chat_group_url")
+  repoUrl             String?   @map("repo_url")
+  notes               String?   @db.LongText
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  request             Request?  @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  requesterTeam       Team      @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
+  pmOwner             User?     @relation("ProjectPmOwner", fields: [pmOwnerId], references: [id], onDelete: SetNull)
+
+  @@index([requesterTeamId])
+  @@index([pmOwnerId])
+  @@index([status])
+  @@index([businessPriority])
+  @@map("projects")
+}
+
 enum UserStatus {
   ACTIVE
   INACTIVE
 }
-
