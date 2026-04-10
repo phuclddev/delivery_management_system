@@ -1,11 +1,31 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class PermissionsService {
-  findAll() {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findAll() {
+    const permissions = await this.prisma.permission.findMany({
+      orderBy: [{ module: 'asc' }, { action: 'asc' }],
+    });
+
     return {
-      message: 'Permissions module scaffolded. Implementation will be added in a later step.',
+      data: permissions,
+    };
+  }
+
+  async findOne(id: string) {
+    const permission = await this.prisma.permission.findUnique({
+      where: { id },
+    });
+
+    if (!permission) {
+      throw new NotFoundException(`Permission ${id} was not found.`);
+    }
+
+    return {
+      data: permission,
     };
   }
 }
-

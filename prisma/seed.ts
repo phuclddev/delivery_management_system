@@ -34,6 +34,7 @@ const roleSeeds = [
 ];
 
 const permissionModules = [
+  'teams',
   'requests',
   'projects',
   'allocations',
@@ -189,4 +190,3 @@ main()
     await prisma.$disconnect();
     process.exit(1);
   });
-
