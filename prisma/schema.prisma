@@ -21,6 +21,7 @@ model User {
   team          Team?      @relation(fields: [teamId], references: [id], onDelete: SetNull)
   userRoles     UserRole[]
   ownedProjects Project[]  @relation("ProjectPmOwner")
+  allocations   ProjectAllocation[]
 
   @@map("users")
 }
@@ -156,12 +157,37 @@ model Project {
   request             Request?  @relation(fields: [requestId], references: [id], onDelete: SetNull)
   requesterTeam       Team      @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
   pmOwner             User?     @relation("ProjectPmOwner", fields: [pmOwnerId], references: [id], onDelete: SetNull)
+  allocations         ProjectAllocation[]
 
   @@index([requesterTeamId])
   @@index([pmOwnerId])
   @@index([status])
   @@index([businessPriority])
   @@map("projects")
+}
+
+model ProjectAllocation {
+  id             String   @id @default(cuid())
+  memberId       String   @map("member_id")
+  projectId      String   @map("project_id")
+  roleType       String   @map("role_type")
+  allocationPct  Int      @map("allocation_pct")
+  plannedMd      Float?   @map("planned_md")
+  actualMd       Float?   @map("actual_md")
+  startDate      DateTime @map("start_date")
+  endDate        DateTime @map("end_date")
+  priorityWeight Int?     @map("priority_weight")
+  isPrimary      Boolean  @default(false) @map("is_primary")
+  note           String?  @db.LongText
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  member         User     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@index([projectId])
+  @@index([startDate, endDate])
+  @@map("project_allocations")
 }
 
 enum UserStatus {
