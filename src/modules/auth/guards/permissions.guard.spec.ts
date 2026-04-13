@@ -1,4 +1,8 @@
-import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import {
+  ExecutionContext,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PermissionsGuard } from './permissions.guard';
 
@@ -67,6 +71,26 @@ describe('PermissionsGuard', () => {
     ).resolves.toBe(true);
   });
 
+  it('allows access when the user has the super_admin role even without explicit permissions', async () => {
+    reflector.getAllAndOverride.mockReturnValue(['requests:view']);
+    const guard = new PermissionsGuard(
+      reflector as unknown as Reflector,
+      prisma as never,
+    );
+
+    await expect(
+      guard.canActivate(
+        createContext({
+          userId: 'user-1',
+          email: 'owner@garena.vn',
+          roles: ['super_admin'],
+          permissions: [],
+        } as never),
+      ),
+    ).resolves.toBe(true);
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
   it('rejects access when the user lacks the required permission', async () => {
     reflector.getAllAndOverride.mockReturnValue(['roles:manage']);
     prisma.user.findUnique.mockResolvedValue({
@@ -94,5 +118,17 @@ describe('PermissionsGuard', () => {
     await expect(
       guard.canActivate(createContext({ userId: 'user-1', email: 'pm@example.com' })),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('rejects access when the authenticated user is missing', async () => {
+    reflector.getAllAndOverride.mockReturnValue(['requests:view']);
+    const guard = new PermissionsGuard(
+      reflector as unknown as Reflector,
+      prisma as never,
+    );
+
+    await expect(guard.canActivate(createContext())).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 });

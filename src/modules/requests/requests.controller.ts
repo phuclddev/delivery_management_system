@@ -49,6 +49,11 @@ export class RequestsController {
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'teamId', required: false })
   @ApiQuery({ name: 'priority', required: false })
+  @ApiQuery({ name: 'requestType', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortOrder', required: false })
   @ApiOkResponse({ description: 'List requests with optional filters.' })
   findAll(@Query() query: RequestQueryDto) {
     return this.requestsService.findAll(query);

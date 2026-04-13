@@ -16,5 +16,35 @@ export class RequestQueryDto {
   @IsOptional()
   @IsString()
   priority?: string;
-}
 
+  @ApiPropertyOptional({ example: 'feature' })
+  @IsOptional()
+  @IsString()
+  requestType?: string;
+
+  @ApiPropertyOptional({ example: '1' })
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @ApiPropertyOptional({ example: '10' })
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
+
+  @ApiPropertyOptional({
+    example: 'createdAt',
+    description: 'Supported values: createdAt, desiredLiveDate, priority, status, title, requestCode',
+  })
+  @IsOptional()
+  @IsString()
+  sortBy?: string;
+
+  @ApiPropertyOptional({
+    example: 'desc',
+    description: 'Supported values: asc, desc',
+  })
+  @IsOptional()
+  @IsString()
+  sortOrder?: string;
+}

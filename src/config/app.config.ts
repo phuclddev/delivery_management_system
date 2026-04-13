@@ -8,8 +8,16 @@ export default registerAs('app', () => ({
   jwtSecret: process.env.JWT_SECRET ?? '',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '1d',
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
-  allowedGoogleDomains: (process.env.ALLOWED_GOOGLE_DOMAINS ?? '')
+  allowedGoogleDomains: (() => {
+    const domains = (process.env.ALLOWED_GOOGLE_DOMAINS ?? '')
+      .split(',')
+      .map((domain) => domain.trim().toLowerCase())
+      .filter(Boolean);
+
+    return domains.length > 0 ? domains : ['garena.vn'];
+  })(),
+  superAdminEmails: (process.env.SUPER_ADMIN_EMAILS ?? 'dinhphuc.luu@garena.vn')
     .split(',')
-    .map((domain) => domain.trim().toLowerCase())
+    .map((email) => email.trim().toLowerCase())
     .filter(Boolean),
 }));

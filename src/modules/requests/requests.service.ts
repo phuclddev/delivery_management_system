@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, Request } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRequestDto } from './dto/create-request.dto';
@@ -21,8 +21,19 @@ type RequestDetail = Prisma.RequestGetPayload<{
   include: typeof requestDetailInclude;
 }>;
 
+const sortableRequestFields = new Set([
+  'createdAt',
+  'desiredLiveDate',
+  'priority',
+  'status',
+  'title',
+  'requestCode',
+]);
+
 @Injectable()
 export class RequestsService {
+  private readonly logger = new Logger(RequestsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async create(payload: CreateRequestDto) {
@@ -37,19 +48,44 @@ export class RequestsService {
   }
 
   async findAll(query: RequestQueryDto) {
-    const requests = await this.prisma.request.findMany({
-      where: {
-        status: query.status,
-        priority: query.priority,
-        requesterTeamId: query.teamId,
-      },
-      include: requestDetailInclude,
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const page = this.parsePositiveInt(query.page, 1);
+    const pageSize = this.clampPageSize(this.parsePositiveInt(query.pageSize, 20));
+    const sortBy = this.resolveSortBy(query.sortBy);
+    const sortOrder = this.resolveSortOrder(query.sortOrder);
+    const where: Prisma.RequestWhereInput = {
+      status: this.toOptionalString(query.status),
+      priority: this.toOptionalString(query.priority),
+      requestType: this.toOptionalString(query.requestType),
+      requesterTeamId: this.toOptionalString(query.teamId),
+    };
 
-    return { data: requests.map((request) => this.toResponse(request)) };
+    this.logger.debug(
+      `Listing requests with filters=${JSON.stringify(where)}, page=${page}, pageSize=${pageSize}, sortBy=${sortBy}, sortOrder=${sortOrder}.`,
+    );
+
+    const [requests, total] = await this.prisma.$transaction([
+      this.prisma.request.findMany({
+        where,
+        include: requestDetailInclude,
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.request.count({ where }),
+    ]);
+
+    return {
+      data: requests.map((request) => this.toResponse(request)),
+      meta: {
+        page,
+        pageSize,
+        total,
+        sortBy,
+        sortOrder,
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -193,5 +229,39 @@ export class RequestsService {
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,
     };
+  }
+
+  private toOptionalString(value?: string): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private parsePositiveInt(value: string | undefined, fallback: number): number {
+    if (!value) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private clampPageSize(value: number): number {
+    return Math.min(Math.max(value, 1), 100);
+  }
+
+  private resolveSortBy(value?: string): keyof Prisma.RequestOrderByWithRelationInput {
+    if (value && sortableRequestFields.has(value)) {
+      return value as keyof Prisma.RequestOrderByWithRelationInput;
+    }
+
+    return 'createdAt';
+  }
+
+  private resolveSortOrder(value?: string): Prisma.SortOrder {
+    return value?.toLowerCase() === 'asc' ? 'asc' : 'desc';
   }
 }

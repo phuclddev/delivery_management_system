@@ -92,6 +92,16 @@ test/
 cp .env.example .env
 ```
 
+For Google sign-in with the current frontend/backend flow, make sure these backend env vars are set:
+
+```bash
+GOOGLE_CLIENT_ID=your-google-oauth-web-client-id
+ALLOWED_GOOGLE_DOMAINS=garena.vn
+SUPER_ADMIN_EMAILS=dinhphuc.luu@garena.vn
+JWT_SECRET=change-me
+DATABASE_URL="mysql://root:root@localhost:3306/delivery_management_system"
+```
+
 2. Start MySQL:
 
 ```bash
@@ -140,9 +150,9 @@ The seed script creates:
 
 - Teams: `Administration`, `Engineering`, `Project Management`
 - Users:
-  - `admin@example.com`
-  - `pm@example.com`
-  - `dev@example.com`
+  - `admin@garena.vn`
+  - `pm@garena.vn`
+  - `dev@garena.vn`
 - Roles: `admin`, `pm`, `dev`
 - Permissions for:
   - `teams`
@@ -213,8 +223,12 @@ npm run prisma:seed
 
 ## Notes
 
-- Google login expects a Google ID token posted to `POST /api/auth/google`.
-- Allowed Google email domains are controlled by `ALLOWED_GOOGLE_DOMAINS` in `.env`.
+- Google login expects the frontend Google credential posted to `POST /api/auth/google` as `{ "credential": "<google_id_token>" }`.
+- Backend Google token verification uses `GOOGLE_CLIENT_ID`, and it must match the frontend `VITE_GOOGLE_CLIENT_ID`.
+- Allowed Google email domains are restricted to `garena.vn` through `ALLOWED_GOOGLE_DOMAINS`.
+- `dinhphuc.luu@garena.vn` is automatically ensured to have the `super_admin` role on first login through `SUPER_ADMIN_EMAILS`.
+- Failed Google login attempts now log the backend failure reason, including missing backend config, Google verification errors, invalid email verification state, blocked domains, and inactive users.
+- For local frontend Google sign-in, `http://localhost:5173` must be added to the Google OAuth client as an Authorized JavaScript origin.
 - RBAC is enforced through `@RequirePermission(...)` plus the shared JWT + permissions guards.
 - Request validation is applied globally with Nest `ValidationPipe`.
 - Database migrations are committed under `prisma/migrations/`.
