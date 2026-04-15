@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Incident } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateIncidentDto } from './dto/create-incident.dto';
+import { IncidentQueryDto } from './dto/incident-query.dto';
 import { UpdateIncidentDto } from './dto/update-incident.dto';
 
 const incidentInclude = {
@@ -26,6 +27,15 @@ type IncidentDetail = Prisma.IncidentGetPayload<{
   include: typeof incidentInclude;
 }>;
 
+const sortableIncidentFields = new Set([
+  'foundAt',
+  'createdAt',
+  'updatedAt',
+  'severity',
+  'status',
+  'incidentCode',
+]);
+
 @Injectable()
 export class IncidentsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -42,13 +52,52 @@ export class IncidentsService {
     return { data: this.toResponse(incident) };
   }
 
-  async findAll() {
-    const incidents = await this.prisma.incident.findMany({
-      include: incidentInclude,
-      orderBy: [{ foundAt: 'desc' }, { createdAt: 'desc' }],
-    });
+  async findAll(query: IncidentQueryDto) {
+    this.validateOptionalDateRange(query.startDate, query.endDate);
+    const page = this.parsePositiveInt(query.page, 1);
+    const pageSize = this.clampPageSize(this.parsePositiveInt(query.pageSize, 20));
+    const sortBy = this.resolveSortBy(query.sortBy);
+    const sortOrder = this.resolveSortOrder(query.sortOrder);
 
-    return { data: incidents.map((incident) => this.toResponse(incident)) };
+    const where: Prisma.IncidentWhereInput = {
+      projectId: this.toOptionalString(query.projectId),
+      ownerMemberId: this.toOptionalString(query.ownerMemberId),
+      severity: this.toOptionalString(query.severity),
+      domain: this.toOptionalString(query.domain),
+      status: this.toOptionalString(query.status),
+      ...(query.startDate || query.endDate
+        ? {
+            foundAt: {
+              ...(query.startDate ? { gte: new Date(query.startDate) } : {}),
+              ...(query.endDate ? { lte: new Date(query.endDate) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [incidents, total] = await this.prisma.$transaction([
+      this.prisma.incident.findMany({
+        where,
+        include: incidentInclude,
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.incident.count({ where }),
+    ]);
+
+    return {
+      data: incidents.map((incident) => this.toResponse(incident)),
+      meta: {
+        page,
+        pageSize,
+        total,
+        sortBy,
+        sortOrder,
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -121,6 +170,16 @@ export class IncidentsService {
     }
   }
 
+  private validateOptionalDateRange(startDate?: string, endDate?: string) {
+    if (!startDate || !endDate) {
+      return;
+    }
+
+    if (new Date(startDate) > new Date(endDate)) {
+      throw new BadRequestException('startDate must be before or equal to endDate.');
+    }
+  }
+
   private async syncProjectIncidentCount(projectId: string) {
     const count = await this.prisma.incident.count({
       where: { projectId },
@@ -188,5 +247,38 @@ export class IncidentsService {
       updatedAt: incident.updatedAt,
     };
   }
-}
 
+  private toOptionalString(value?: string): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private parsePositiveInt(value: string | undefined, fallback: number): number {
+    if (!value) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private clampPageSize(value: number): number {
+    return Math.min(Math.max(value, 1), 100);
+  }
+
+  private resolveSortBy(value?: string): keyof Prisma.IncidentOrderByWithRelationInput {
+    if (value && sortableIncidentFields.has(value)) {
+      return value as keyof Prisma.IncidentOrderByWithRelationInput;
+    }
+
+    return 'foundAt';
+  }
+
+  private resolveSortOrder(value?: string): Prisma.SortOrder {
+    return value?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+  }
+}

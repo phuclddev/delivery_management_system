@@ -12,19 +12,23 @@ import { UpdateProjectDto } from './dto/update-project.dto';
 
 const projectDetailInclude = {
   requesterTeam: true,
-  request: {
-    select: {
-      id: true,
-      requestCode: true,
-      title: true,
-      status: true,
-    },
-  },
   pmOwner: {
     select: {
       id: true,
       email: true,
       displayName: true,
+    },
+  },
+  requests: {
+    select: {
+      id: true,
+      requestCode: true,
+      title: true,
+      status: true,
+      createdAt: true,
+    },
+    orderBy: {
+      createdAt: 'asc',
     },
   },
 } satisfies Prisma.ProjectInclude;
@@ -33,35 +37,91 @@ type ProjectDetail = Prisma.ProjectGetPayload<{
   include: typeof projectDetailInclude;
 }>;
 
+type PrismaExecutor = Prisma.TransactionClient | PrismaService;
+
+type ProjectRequestSummary = {
+  id: string;
+  requestCode: string;
+  title: string;
+  status: string;
+  createdAt?: Date;
+};
+
+const sortableProjectFields = new Set([
+  'createdAt',
+  'updatedAt',
+  'plannedLiveDate',
+  'actualLiveDate',
+  'status',
+  'businessPriority',
+  'projectCode',
+  'name',
+]);
+
 @Injectable()
 export class ProjectsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(payload: CreateProjectDto) {
-    await this.ensureProjectRelations(payload);
+    const project = await this.prisma.$transaction(async (tx) => {
+      await this.ensureProjectRelations(payload, undefined, tx);
 
-    const project = await this.prisma.project.create({
-      data: this.toCreateProjectData(payload),
-      include: projectDetailInclude,
+      const created = await tx.project.create({
+        data: this.toCreateProjectData(payload),
+      });
+
+      if (payload.requestId) {
+        await tx.request.update({
+          where: { id: payload.requestId },
+          data: { projectId: created.id },
+        });
+      }
+
+      return tx.project.findUniqueOrThrow({
+        where: { id: created.id },
+        include: projectDetailInclude,
+      });
     });
 
     return { data: this.toResponse(project) };
   }
 
   async findAll(query: ProjectQueryDto) {
-    const projects = await this.prisma.project.findMany({
-      where: {
-        status: query.status,
-        businessPriority: query.priority,
-        requesterTeamId: query.teamId,
-      },
-      include: projectDetailInclude,
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const page = this.parsePositiveInt(query.page, 1);
+    const pageSize = this.clampPageSize(this.parsePositiveInt(query.pageSize, 20));
+    const sortBy = this.resolveSortBy(query.sortBy);
+    const sortOrder = this.resolveSortOrder(query.sortOrder);
 
-    return { data: projects.map((project) => this.toResponse(project)) };
+    const where: Prisma.ProjectWhereInput = {
+      status: this.toOptionalString(query.status),
+      businessPriority: this.toOptionalString(query.priority),
+      requesterTeamId: this.toOptionalString(query.teamId),
+      pmOwnerId: this.toOptionalString(query.pmOwnerId),
+    };
+
+    const [projects, total] = await this.prisma.$transaction([
+      this.prisma.project.findMany({
+        where,
+        include: projectDetailInclude,
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.project.count({ where }),
+    ]);
+
+    return {
+      data: projects.map((project) => this.toResponse(project)),
+      meta: {
+        page,
+        pageSize,
+        total,
+        sortBy,
+        sortOrder,
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -78,13 +138,26 @@ export class ProjectsService {
   }
 
   async update(id: string, payload: UpdateProjectDto) {
-    await this.ensureProjectExists(id);
-    await this.ensureProjectRelations(payload, id);
+    const project = await this.prisma.$transaction(async (tx) => {
+      await this.ensureProjectExists(id, tx);
+      await this.ensureProjectRelations(payload, id, tx);
 
-    const project = await this.prisma.project.update({
-      where: { id },
-      data: this.toUpdateProjectData(payload),
-      include: projectDetailInclude,
+      await tx.project.update({
+        where: { id },
+        data: this.toUpdateProjectData(payload),
+      });
+
+      if (payload.requestId) {
+        await tx.request.update({
+          where: { id: payload.requestId },
+          data: { projectId: id },
+        });
+      }
+
+      return tx.project.findUniqueOrThrow({
+        where: { id },
+        include: projectDetailInclude,
+      });
     });
 
     return { data: this.toResponse(project) };
@@ -106,63 +179,95 @@ export class ProjectsService {
     requestId: string,
     payload: ConvertRequestToProjectDto = {},
   ) {
-    const request = await this.prisma.request.findUnique({
-      where: { id: requestId },
-      include: {
-        project: true,
-      },
-    });
+    const project = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.request.findUnique({
+        where: { id: requestId },
+        include: {
+          project: true,
+        },
+      });
 
-    if (!request) {
-      throw new NotFoundException(`Request ${requestId} was not found.`);
-    }
+      if (!request) {
+        throw new NotFoundException(`Request ${requestId} was not found.`);
+      }
 
-    if (request.project) {
-      throw new ConflictException(`Request ${requestId} has already been converted to a project.`);
-    }
+      if (request.project) {
+        if (payload.projectId && request.project.id === payload.projectId) {
+          return tx.project.findUniqueOrThrow({
+            where: { id: payload.projectId },
+            include: projectDetailInclude,
+          });
+        }
 
-    const projectPayload: CreateProjectDto = {
-      projectCode: payload.projectCode ?? `${request.requestCode}-PRJ`,
-      requestId: request.id,
-      name: payload.name ?? request.title,
-      requesterTeamId: request.requesterTeamId,
-      pmOwnerId: payload.pmOwnerId,
-      projectType: payload.projectType ?? request.requestType,
-      scopeType: request.scopeType,
-      status: payload.status ?? 'planned',
-      businessPriority: payload.businessPriority ?? request.priority,
-      riskLevel: payload.riskLevel,
-      requestedLiveDate: request.desiredLiveDate?.toISOString(),
-      plannedStartDate: payload.plannedStartDate,
-      plannedLiveDate: payload.plannedLiveDate,
-      actualStartDate: payload.actualStartDate,
-      actualLiveDate: payload.actualLiveDate,
-      backendStartDate: payload.backendStartDate ?? request.backendStartDate?.toISOString(),
-      backendEndDate: payload.backendEndDate ?? request.backendEndDate?.toISOString(),
-      frontendStartDate:
-        payload.frontendStartDate ?? request.frontendStartDate?.toISOString(),
-      frontendEndDate: payload.frontendEndDate ?? request.frontendEndDate?.toISOString(),
-      currentScopeVersion: payload.currentScopeVersion,
-      scopeChangeCount: payload.scopeChangeCount,
-      blockerCount: payload.blockerCount,
-      incidentCount: payload.incidentCount,
-      chatGroupUrl: payload.chatGroupUrl,
-      repoUrl: payload.repoUrl,
-      notes: payload.notes,
-    };
+        throw new ConflictException(`Request ${requestId} is already linked to project ${request.project.id}.`);
+      }
 
-    await this.ensureProjectRelations(projectPayload);
+      if (payload.projectId) {
+        await this.ensureProjectExists(payload.projectId, tx);
 
-    const project = await this.prisma.project.create({
-      data: this.toCreateProjectData(projectPayload),
-      include: projectDetailInclude,
+        await tx.request.update({
+          where: { id: requestId },
+          data: { projectId: payload.projectId },
+        });
+
+        return tx.project.findUniqueOrThrow({
+          where: { id: payload.projectId },
+          include: projectDetailInclude,
+        });
+      }
+
+      const projectPayload: CreateProjectDto = {
+        projectCode: payload.projectCode ?? `${request.requestCode}-PRJ`,
+        requestId: request.id,
+        name: payload.name ?? request.title,
+        requesterTeamId: request.requesterTeamId,
+        pmOwnerId: payload.pmOwnerId,
+        projectType: payload.projectType ?? request.requestType,
+        scopeType: request.scopeType,
+        status: payload.status ?? 'planned',
+        businessPriority: payload.businessPriority ?? request.priority,
+        riskLevel: payload.riskLevel,
+        requestedLiveDate: request.desiredLiveDate?.toISOString(),
+        plannedStartDate: payload.plannedStartDate,
+        plannedLiveDate: payload.plannedLiveDate,
+        actualStartDate: payload.actualStartDate,
+        actualLiveDate: payload.actualLiveDate,
+        backendStartDate: payload.backendStartDate ?? request.backendStartDate?.toISOString(),
+        backendEndDate: payload.backendEndDate ?? request.backendEndDate?.toISOString(),
+        frontendStartDate:
+          payload.frontendStartDate ?? request.frontendStartDate?.toISOString(),
+        frontendEndDate: payload.frontendEndDate ?? request.frontendEndDate?.toISOString(),
+        currentScopeVersion: payload.currentScopeVersion,
+        scopeChangeCount: payload.scopeChangeCount,
+        blockerCount: payload.blockerCount,
+        incidentCount: payload.incidentCount,
+        chatGroupUrl: payload.chatGroupUrl,
+        repoUrl: payload.repoUrl,
+        notes: payload.notes,
+      };
+
+      await this.ensureProjectRelations(projectPayload, undefined, tx);
+
+      const created = await tx.project.create({
+        data: this.toCreateProjectData(projectPayload),
+      });
+
+      await tx.request.update({
+        where: { id: requestId },
+        data: { projectId: created.id },
+      });
+
+      return tx.project.findUniqueOrThrow({
+        where: { id: created.id },
+        include: projectDetailInclude,
+      });
     });
 
     return { data: this.toResponse(project) };
   }
 
-  private async ensureProjectExists(id: string): Promise<Project> {
-    const project = await this.prisma.project.findUnique({ where: { id } });
+  private async ensureProjectExists(id: string, db: PrismaExecutor = this.prisma): Promise<Project> {
+    const project = await db.project.findUnique({ where: { id } });
 
     if (!project) {
       throw new NotFoundException(`Project ${id} was not found.`);
@@ -174,9 +279,10 @@ export class ProjectsService {
   private async ensureProjectRelations(
     payload: Partial<CreateProjectDto>,
     currentProjectId?: string,
+    db: PrismaExecutor = this.prisma,
   ): Promise<void> {
     if (payload.requesterTeamId) {
-      const team = await this.prisma.team.findUnique({
+      const team = await db.team.findUnique({
         where: { id: payload.requesterTeamId },
       });
 
@@ -186,7 +292,7 @@ export class ProjectsService {
     }
 
     if (payload.pmOwnerId) {
-      const user = await this.prisma.user.findUnique({
+      const user = await db.user.findUnique({
         where: { id: payload.pmOwnerId },
       });
 
@@ -196,7 +302,7 @@ export class ProjectsService {
     }
 
     if (payload.requestId) {
-      const request = await this.prisma.request.findUnique({
+      const request = await db.request.findUnique({
         where: { id: payload.requestId },
         include: {
           project: true,
@@ -220,7 +326,6 @@ export class ProjectsService {
   ): Prisma.ProjectUncheckedCreateInput {
     return {
       projectCode: payload.projectCode,
-      requestId: payload.requestId,
       name: payload.name,
       requesterTeamId: payload.requesterTeamId,
       pmOwnerId: payload.pmOwnerId,
@@ -253,7 +358,6 @@ export class ProjectsService {
   ): Prisma.ProjectUncheckedUpdateInput {
     return {
       projectCode: payload.projectCode,
-      requestId: payload.requestId,
       name: payload.name,
       requesterTeamId: payload.requesterTeamId,
       pmOwnerId: payload.pmOwnerId,
@@ -282,10 +386,20 @@ export class ProjectsService {
   }
 
   private toResponse(project: ProjectDetail) {
+    const requests = project.requests.map((request) => ({
+      id: request.id,
+      requestCode: request.requestCode,
+      title: request.title,
+      status: request.status,
+    }));
+    const compatibilityRequest = (requests[0] as ProjectRequestSummary | undefined) ?? null;
+
     return {
       id: project.id,
       projectCode: project.projectCode,
-      request: project.request,
+      request: compatibilityRequest,
+      requests,
+      requestsCount: requests.length,
       name: project.name,
       requesterTeam: {
         id: project.requesterTeam.id,
@@ -317,5 +431,39 @@ export class ProjectsService {
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     };
+  }
+
+  private toOptionalString(value?: string): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private parsePositiveInt(value: string | undefined, fallback: number): number {
+    if (!value) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private clampPageSize(value: number): number {
+    return Math.min(Math.max(value, 1), 100);
+  }
+
+  private resolveSortBy(value?: string): keyof Prisma.ProjectOrderByWithRelationInput {
+    if (value && sortableProjectFields.has(value)) {
+      return value as keyof Prisma.ProjectOrderByWithRelationInput;
+    }
+
+    return 'createdAt';
+  }
+
+  private resolveSortOrder(value?: string): Prisma.SortOrder {
+    return value?.toLowerCase() === 'asc' ? 'asc' : 'desc';
   }
 }

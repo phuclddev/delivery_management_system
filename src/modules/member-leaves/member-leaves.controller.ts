@@ -6,13 +6,21 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOkResponse,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { CreateMemberLeaveDto } from './dto/create-member-leave.dto';
+import { MemberLeaveQueryDto } from './dto/member-leave-query.dto';
 import { UpdateMemberLeaveDto } from './dto/update-member-leave.dto';
 import { MemberLeavesService } from './member-leaves.service';
 
@@ -33,9 +41,17 @@ export class MemberLeavesController {
 
   @Get()
   @RequirePermission('leaves:view')
+  @ApiQuery({ name: 'memberId', required: false })
+  @ApiQuery({ name: 'leaveType', required: false })
+  @ApiQuery({ name: 'startDate', required: false })
+  @ApiQuery({ name: 'endDate', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortOrder', required: false })
   @ApiOkResponse({ description: 'List member leave records.' })
-  findAll() {
-    return this.memberLeavesService.findAll();
+  findAll(@Query() query: MemberLeaveQueryDto) {
+    return this.memberLeavesService.findAll(query);
   }
 
   @Get(':id')
@@ -60,4 +76,3 @@ export class MemberLeavesController {
     return this.memberLeavesService.remove(id);
   }
 }
-

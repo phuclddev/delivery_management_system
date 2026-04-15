@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { GoogleLoginDto } from './dto/google-login.dto';
@@ -26,6 +33,19 @@ export class AuthController {
     description: 'Return the currently authenticated user profile.',
   })
   me(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.me(user.userId);
+    return this.authService.me(user);
+  }
+
+  @Post('impersonate/:userId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOkResponse({
+    description: 'Impersonate another user and receive an impersonation JWT.',
+  })
+  impersonate(
+    @Param('userId') userId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.authService.impersonate(user, userId);
   }
 }

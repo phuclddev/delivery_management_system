@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App,
   Button,
+  Descriptions,
   Drawer,
   Empty,
   Form,
@@ -11,19 +12,30 @@ import {
   Popconfirm,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
+  Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
+import { ProjectEventsSection } from '@/components/project-events/ProjectEventsSection';
+import { RequestAssignmentsSection } from '@/components/request-assignments/RequestAssignmentsSection';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useAuth } from '@/auth/useAuth';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { useReferenceData } from '@/hooks/useReferenceData';
+import { useDataProvider } from '@/providers/dataProvider';
+import type { DataProviderError } from '@/providers/dataProvider';
+import type { ProjectRecord } from '@/types/domain';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDate, toDateInputValue, toIsoString } from '@/utils/format';
+import { getPrimaryProjectRequest, getProjectRequests } from '@/utils/project-relations';
 import {
   projectStatusOptions,
   requestPriorityOptions,
@@ -32,53 +44,13 @@ import {
   scopeTypeOptions,
 } from '@/utils/options';
 
-interface ProjectRecord {
-  id: string;
-  projectCode: string;
-  request?: {
-    id: string;
-    requestCode: string;
-    title: string;
-    status: string;
-  } | null;
-  name: string;
-  requesterTeam: {
-    id: string;
-    code: string;
-    name: string;
-  };
-  pmOwner?: {
-    id: string;
-    email: string;
-    displayName: string;
-  } | null;
-  projectType: string;
-  scopeType: string;
-  status: string;
-  businessPriority: string;
-  riskLevel?: string | null;
-  requestedLiveDate?: string | null;
-  plannedStartDate?: string | null;
-  plannedLiveDate?: string | null;
-  actualStartDate?: string | null;
-  actualLiveDate?: string | null;
-  backendStartDate?: string | null;
-  backendEndDate?: string | null;
-  frontendStartDate?: string | null;
-  frontendEndDate?: string | null;
-  currentScopeVersion?: string | null;
-  scopeChangeCount?: number | null;
-  blockerCount?: number | null;
-  incidentCount?: number | null;
-  chatGroupUrl?: string | null;
-  repoUrl?: string | null;
-  notes?: string | null;
-}
+const { Text } = Typography;
 
 export default function ProjectsPage() {
   usePageTitle('Projects');
   const { message } = App.useApp();
   const { user } = useAuth();
+  const provider = useDataProvider();
   const { hasPermission } = usePermissions();
   const canView = hasPermission('projects:view');
   const canCreate = hasPermission('projects:create');
@@ -89,7 +61,31 @@ export default function ProjectsPage() {
   const [editingRecord, setEditingRecord] = useState<ProjectRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProject, setSelectedProject] = useState<ProjectRecord | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<DataProviderError | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm();
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'projects-visible-filters',
+    ['status', 'priority', 'pmOwnerId'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'projects-visible-columns',
+    [
+      'projectCode',
+      'name',
+      'request',
+      'requestsCount',
+      'pmOwner',
+      'status',
+      'businessPriority',
+      'plannedLiveDate',
+      'actualLiveDate',
+    ],
+  );
 
   const table = useCrudTable<ProjectRecord>({
     resource: 'projects',
@@ -97,16 +93,73 @@ export default function ProjectsPage() {
     initialSort: { field: 'plannedLiveDate', order: 'descend' },
   });
 
+  useEffect(() => {
+    if (!detailOpen || !selectedProjectId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadProject = async () => {
+      setDetailLoading(true);
+      setDetailError(null);
+
+      try {
+        const result = await provider.getOne<ProjectRecord>({
+          resource: 'projects',
+          id: selectedProjectId,
+        });
+
+        if (!cancelled) {
+          setSelectedProject(result.data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDetailError(error as DataProviderError);
+          setSelectedProject(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
+      }
+    };
+
+    void loadProject();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detailOpen, provider, selectedProjectId]);
+
   const columns = useMemo<ColumnsType<ProjectRecord>>(
     () => [
       { title: 'Project Code', dataIndex: 'projectCode', key: 'projectCode', sorter: true, width: 140 },
       { title: 'Name', dataIndex: 'name', key: 'name', sorter: true, width: 220 },
       {
-        title: 'Request',
+        title: 'Requests',
         key: 'request',
         width: 220,
-        render: (_, record) =>
-          record.request ? `${record.request.requestCode} · ${record.request.title}` : '-',
+        render: (_, record) => {
+          const linkedRequests = getProjectRequests(record);
+          const primaryRequest = linkedRequests[0];
+
+          if (!primaryRequest) {
+            return '-';
+          }
+
+          const suffix =
+            linkedRequests.length > 1 ? ` +${linkedRequests.length - 1} more` : '';
+
+          return `${primaryRequest.requestCode} · ${primaryRequest.title}${suffix}`;
+        },
+      },
+      {
+        title: 'Count',
+        key: 'requestsCount',
+        width: 90,
+        align: 'right',
+        render: (_, record) => record.requestsCount ?? getProjectRequests(record).length,
       },
       {
         title: 'PM Owner',
@@ -147,9 +200,10 @@ export default function ProjectsPage() {
         title: 'Actions',
         key: 'actions',
         fixed: 'right',
-        width: 120,
+        width: 170,
         render: (_, record) => (
           <Space>
+            <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(record.id)} />
             {canUpdate ? (
               <Button size="small" icon={<EditOutlined />} onClick={() => openEditDrawer(record)} />
             ) : null}
@@ -169,6 +223,132 @@ export default function ProjectsPage() {
     [canDelete, canUpdate],
   );
 
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
+  );
+
+  const exportColumns = useMemo<CsvColumnDefinition<ProjectRecord>[]>(
+    () =>
+      [
+        { key: 'projectCode', label: 'Project Code', getValue: (record: ProjectRecord) => record.projectCode },
+        { key: 'name', label: 'Name', getValue: (record: ProjectRecord) => record.name },
+        {
+          key: 'request',
+          label: 'Requests',
+          getValue: (record: ProjectRecord) => {
+            const linkedRequests = getProjectRequests(record);
+            return linkedRequests.map((item) => `${item.requestCode} · ${item.title}`).join(' | ');
+          },
+        },
+        {
+          key: 'requestsCount',
+          label: 'Count',
+          getValue: (record: ProjectRecord) => record.requestsCount ?? getProjectRequests(record).length,
+        },
+        {
+          key: 'pmOwner',
+          label: 'PM Owner',
+          getValue: (record: ProjectRecord) => record.pmOwner?.displayName ?? '',
+        },
+        { key: 'status', label: 'Status', getValue: (record: ProjectRecord) => record.status ?? '' },
+        {
+          key: 'businessPriority',
+          label: 'Priority',
+          getValue: (record: ProjectRecord) => record.businessPriority ?? '',
+        },
+        {
+          key: 'plannedLiveDate',
+          label: 'Planned Live',
+          getValue: (record: ProjectRecord) => formatDate(record.plannedLiveDate),
+        },
+        {
+          key: 'actualLiveDate',
+          label: 'Actual Live',
+          getValue: (record: ProjectRecord) => formatDate(record.actualLiveDate),
+        },
+      ].filter((column) => visibleColumnKeys.includes(column.key)),
+    [visibleColumnKeys],
+  );
+
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'status',
+        label: 'Status',
+        node: (
+          <Select
+            allowClear
+            placeholder="Status"
+            options={projectStatusOptions}
+            style={{ width: 160 }}
+            value={filterValues.status as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, status: value }))}
+          />
+        ),
+      },
+      {
+        key: 'priority',
+        label: 'Priority',
+        node: (
+          <Select
+            allowClear
+            placeholder="Priority"
+            options={requestPriorityOptions}
+            style={{ width: 160 }}
+            value={filterValues.priority as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, priority: value }))}
+          />
+        ),
+      },
+      {
+        key: 'pmOwnerId',
+        label: 'PM owner',
+        node: (
+          <Select
+            allowClear
+            placeholder="PM owner"
+            options={userOptions}
+            style={{ width: 200 }}
+            value={filterValues.pmOwnerId as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, pmOwnerId: value }))}
+          />
+        ),
+      },
+    ],
+    [filterValues.pmOwnerId, filterValues.priority, filterValues.status, userOptions],
+  );
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+
+    try {
+      const result = await table.provider.getList<ProjectRecord>({
+        resource: 'projects',
+        filters: table.filters,
+        pagination: { current: 1, pageSize: 500 },
+        sort:
+          typeof table.sorter.field === 'string'
+            ? {
+                field: table.sorter.field,
+                order: table.sorter.order ?? undefined,
+              }
+            : undefined,
+      });
+
+      downloadCsv(buildCsvFileName('projects'), exportColumns, result.data);
+      message.success('CSV exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export projects.');
+    } finally {
+      setExporting(false);
+    }
+  }, [exportColumns, message, table.filters, table.provider, table.sorter.field, table.sorter.order]);
+
   function openCreateDrawer() {
     setEditingRecord(null);
     form.resetFields();
@@ -186,7 +366,7 @@ export default function ProjectsPage() {
     setEditingRecord(record);
     form.setFieldsValue({
       ...record,
-      requestId: record.request?.id,
+      requestId: undefined,
       requesterTeamId: record.requesterTeam.id,
       pmOwnerId: record.pmOwner?.id,
       requestedLiveDate: toDateInputValue(record.requestedLiveDate),
@@ -200,6 +380,20 @@ export default function ProjectsPage() {
       frontendEndDate: toDateInputValue(record.frontendEndDate),
     });
     setDrawerOpen(true);
+  }
+
+  function openDetailDrawer(projectId: string) {
+    setSelectedProjectId(projectId);
+    setSelectedProject(null);
+    setDetailError(null);
+    setDetailOpen(true);
+  }
+
+  function closeDetailDrawer() {
+    setDetailOpen(false);
+    setSelectedProjectId(null);
+    setSelectedProject(null);
+    setDetailError(null);
   }
 
   async function handleDelete(record: ProjectRecord) {
@@ -265,43 +459,32 @@ export default function ProjectsPage() {
           </Space>
         }
         filters={
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder="Status"
-              options={projectStatusOptions}
-              style={{ width: 160 }}
-              value={filterValues.status as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, status: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Priority"
-              options={requestPriorityOptions}
-              style={{ width: 160 }}
-              value={filterValues.priority as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, priority: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="PM owner"
-              options={userOptions}
-              style={{ width: 200 }}
-              value={filterValues.pmOwnerId as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, pmOwnerId: value }))}
-            />
-            <Button type="primary" onClick={() => table.setFilters(filterValues)}>
-              Apply Filters
-            </Button>
-            <Button
-              onClick={() => {
-                setFilterValues({});
-                table.setFilters({});
-              }}
-            >
-              Reset
-            </Button>
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onApply={() => table.setFilters(filterValues)}
+            onReset={() => {
+              setFilterValues({});
+              table.setFilters({});
+            }}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={[
+              { key: 'projectCode', label: 'Project Code' },
+              { key: 'name', label: 'Name' },
+              { key: 'request', label: 'Requests' },
+              { key: 'requestsCount', label: 'Count' },
+              { key: 'pmOwner', label: 'PM Owner' },
+              { key: 'status', label: 'Status' },
+              { key: 'businessPriority', label: 'Priority' },
+              { key: 'plannedLiveDate', label: 'Planned Live' },
+              { key: 'actualLiveDate', label: 'Actual Live' },
+              { key: 'actions', label: 'Actions', alwaysVisible: true },
+            ]}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -319,7 +502,7 @@ export default function ProjectsPage() {
         ) : null}
         <Table<ProjectRecord>
           rowKey="id"
-          columns={columns}
+          columns={visibleColumns}
           dataSource={table.rows}
           loading={table.loading}
           onChange={table.handleTableChange}
@@ -350,8 +533,12 @@ export default function ProjectsPage() {
           <Form.Item label="Project code" name="projectCode" rules={[{ required: true }]}>
             <Input placeholder="PRJ-031" />
           </Form.Item>
-          <Form.Item label="Linked request" name="requestId">
-            <Select allowClear options={requestOptions} placeholder="Optional request linkage" />
+          <Form.Item label="Attach one request now" name="requestId">
+            <Select
+              allowClear
+              options={requestOptions}
+              placeholder="Optional quick-link for one request"
+            />
           </Form.Item>
           <Form.Item label="Project name" name="name" rules={[{ required: true }]}>
             <Input />
@@ -441,6 +628,134 @@ export default function ProjectsPage() {
             <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
+      </Drawer>
+
+      <Drawer
+        title={selectedProject ? `Project: ${selectedProject.projectCode}` : 'Project Detail'}
+        width={760}
+        open={detailOpen}
+        onClose={closeDetailDrawer}
+        destroyOnClose
+      >
+        {detailLoading ? <Spin /> : null}
+        {detailError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Unable to load project"
+            description={detailError.message}
+          />
+        ) : null}
+        {selectedProject && !detailLoading ? (
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Descriptions
+              bordered
+              column={1}
+              size="small"
+              items={[
+                { key: 'code', label: 'Project code', children: selectedProject.projectCode },
+                { key: 'name', label: 'Name', children: selectedProject.name },
+                { key: 'team', label: 'Requester team', children: selectedProject.requesterTeam.name },
+                { key: 'owner', label: 'PM owner', children: selectedProject.pmOwner?.displayName ?? '-' },
+                { key: 'status', label: 'Status', children: selectedProject.status ?? '-' },
+                { key: 'priority', label: 'Priority', children: selectedProject.businessPriority ?? '-' },
+                {
+                  key: 'requestsCount',
+                  label: 'Linked requests',
+                  children:
+                    selectedProject.requestsCount ?? getProjectRequests(selectedProject).length,
+                },
+                {
+                  key: 'plannedLive',
+                  label: 'Planned live date',
+                  children: formatDate(selectedProject.plannedLiveDate),
+                },
+                {
+                  key: 'actualLive',
+                  label: 'Actual live date',
+                  children: formatDate(selectedProject.actualLiveDate),
+                },
+                { key: 'notes', label: 'Notes', children: selectedProject.notes || '-' },
+              ]}
+            />
+
+            <div>
+              <Text strong>Related requests</Text>
+              <Table
+                size="small"
+                rowKey="id"
+                pagination={false}
+                style={{ marginTop: 12 }}
+                dataSource={getProjectRequests(selectedProject)}
+                locale={{
+                  emptyText: <Empty description="No linked requests" image={Empty.PRESENTED_IMAGE_SIMPLE} />,
+                }}
+                columns={[
+                  {
+                    title: 'Request Code',
+                    dataIndex: 'requestCode',
+                    key: 'requestCode',
+                    width: 160,
+                  },
+                  {
+                    title: 'Title',
+                    dataIndex: 'title',
+                    key: 'title',
+                  },
+                  {
+                    title: 'Status',
+                    dataIndex: 'status',
+                    key: 'status',
+                    width: 140,
+                    render: (value) => value ? <Tag>{value}</Tag> : '-',
+                  },
+                ]}
+              />
+            </div>
+
+            <ProjectEventsSection
+              title="Project Timeline"
+              description="Track operational milestones, scope shifts, handovers, and live-history for this project."
+              projectId={selectedProject.id}
+              projectOptions={[
+                {
+                  value: selectedProject.id,
+                  label: `${selectedProject.projectCode} · ${selectedProject.name}`,
+                },
+              ]}
+              requestOptions={getProjectRequests(selectedProject).map((request) => ({
+                value: request.id,
+                label: `${request.requestCode} · ${request.title}`,
+              }))}
+              userOptions={userOptions}
+              canCreate={canUpdate}
+              canUpdate={canUpdate}
+              canDelete={canDelete}
+              emptyDescription="No timeline events have been recorded for this project yet."
+            />
+
+            <RequestAssignmentsSection
+              title="Project Assignments"
+              description="Review request-level ownership across this project, with member filters and FE/BE complexity details where estimation is needed."
+              projectId={selectedProject.id}
+              requestOptions={getProjectRequests(selectedProject).map((request) => ({
+                value: request.id,
+                label: `${request.requestCode} · ${request.title}`,
+              }))}
+              projectOptions={[
+                {
+                  value: selectedProject.id,
+                  label: `${selectedProject.projectCode} · ${selectedProject.name}`,
+                },
+              ]}
+              userOptions={userOptions}
+              canCreate={canUpdate}
+              canUpdate={canUpdate}
+              canDelete={canDelete}
+              emptyDescription="No request assignments have been added for this project yet."
+            />
+          </Space>
+        ) : null}
       </Drawer>
     </PermissionBoundary>
   );

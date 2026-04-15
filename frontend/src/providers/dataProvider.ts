@@ -11,6 +11,8 @@ export type DataResource =
   | 'teams'
   | 'requests'
   | 'projects'
+  | 'projectEvents'
+  | 'requestAssignments'
   | 'allocations'
   | 'incidents'
   | 'artifacts'
@@ -126,9 +128,10 @@ const resourceConfigs: Record<DataResource, ResourceConfig> = {
   },
   requests: {
     path: 'requests',
-    listServerFilters: ['status', 'teamId', 'priority'],
+    listServerFilters: ['status', 'teamId', 'projectId', 'priority'],
     clientFilterPaths: {
       teamId: 'requesterTeam.id',
+      projectId: 'project.id',
       requestType: 'requestType',
     },
     supportsCreate: true,
@@ -142,6 +145,34 @@ const resourceConfigs: Record<DataResource, ResourceConfig> = {
       teamId: 'requesterTeam.id',
       priority: 'businessPriority',
       pmOwnerId: 'pmOwner.id',
+    },
+    supportsCreate: true,
+    supportsUpdate: true,
+    supportsDelete: true,
+  },
+  projectEvents: {
+    path: 'project-events',
+    listServerFilters: ['projectId', 'requestId', 'eventType', 'actorUserId', 'sourceType'],
+    clientFilterPaths: {
+      projectId: 'project.id',
+      requestId: 'request.id',
+      eventType: 'eventType',
+      actorUserId: 'actorUser.id',
+      sourceType: 'sourceType',
+    },
+    supportsCreate: true,
+    supportsUpdate: true,
+    supportsDelete: true,
+  },
+  requestAssignments: {
+    path: 'request-assignments',
+    listServerFilters: ['requestId', 'projectId', 'memberId', 'roleType', 'status', 'startDate', 'endDate'],
+    clientFilterPaths: {
+      requestId: 'request.id',
+      projectId: 'project.id',
+      memberId: 'member.id',
+      roleType: 'roleType',
+      status: 'status',
     },
     supportsCreate: true,
     supportsUpdate: true,

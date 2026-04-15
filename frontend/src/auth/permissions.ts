@@ -45,6 +45,7 @@ const rolePermissionMap: Record<string, Set<string> | 'all'> = {
   admin: 'all',
   pm: pmPermissions,
   dev: devPermissions,
+  requester: new Set(['requests:create', 'requests:view_own', 'requests:update_own']),
 };
 
 export function getUserPermissions(user: CurrentUser | null): Set<string> | 'all' {
@@ -75,4 +76,3 @@ export function userHasPermission(user: CurrentUser | null, permission: string):
   const permissions = getUserPermissions(user);
   return permissions === 'all' ? true : permissions.has(permission);
 }
-

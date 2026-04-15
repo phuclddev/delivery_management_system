@@ -8,34 +8,37 @@ datasource db {
 }
 
 model User {
-  id            String     @id @default(cuid())
-  email         String     @unique
-  displayName   String
-  googleId      String?    @unique @map("google_id")
-  avatarUrl     String?    @map("avatar_url")
-  status        UserStatus @default(ACTIVE)
-  teamId        String?    @map("team_id")
-  lastLoginAt   DateTime?  @map("last_login_at")
-  createdAt     DateTime   @default(now()) @map("created_at")
-  updatedAt     DateTime   @updatedAt @map("updated_at")
-  team          Team?      @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  userRoles     UserRole[]
-  ownedProjects Project[]  @relation("ProjectPmOwner")
-  allocations   ProjectAllocation[]
-  ownedIncidents Incident[] @relation("IncidentOwner")
-  uploadedArtifacts ProjectArtifact[] @relation("ArtifactUploader")
-  memberLeaves MemberLeave[]
+  id                 String              @id @default(cuid())
+  email              String              @unique
+  displayName        String
+  googleId           String?             @unique @map("google_id")
+  avatarUrl          String?             @map("avatar_url")
+  status             UserStatus          @default(ACTIVE)
+  teamId             String?             @map("team_id")
+  lastLoginAt        DateTime?           @map("last_login_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  team               Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  userRoles          UserRole[]
+  ownedRequests      Request[]           @relation("RequestOwner")
+  ownedProjects      Project[]           @relation("ProjectPmOwner")
+  allocations        ProjectAllocation[]
+  requestAssignments RequestAssignment[]
+  projectEvents      ProjectEvent[]      @relation("ProjectEventActor")
+  ownedIncidents     Incident[]          @relation("IncidentOwner")
+  uploadedArtifacts  ProjectArtifact[]   @relation("ArtifactUploader")
+  memberLeaves       MemberLeave[]
 
   @@map("users")
 }
 
 model Team {
-  id          String   @id @default(cuid())
-  code        String   @unique
+  id          String    @id @default(cuid())
+  code        String    @unique
   name        String
   description String?
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
   users       User[]
   requests    Request[]
   projects    Project[]
@@ -72,94 +75,102 @@ model Permission {
 }
 
 model UserRole {
-  userId     String   @map("user_id")
-  roleId     String   @map("role_id")
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
-  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id")
+  roleId    String   @map("role_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
   @@map("user_roles")
 }
 
 model RolePermission {
-  roleId      String   @map("role_id")
-  permissionId String  @map("permission_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  permission  Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-  role        Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId       String     @map("role_id")
+  permissionId String     @map("permission_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
   @@map("role_permissions")
 }
 
 model Request {
-  id                 String    @id @default(cuid())
-  requestCode        String    @unique @map("request_code")
+  id                 String              @id @default(cuid())
+  requestCode        String              @unique @map("request_code")
+  projectId          String?             @map("project_id")
+  ownerUserId        String?             @map("owner_user_id")
   title              String
-  requesterTeamId    String    @map("requester_team_id")
-  campaignName       String?   @map("campaign_name")
-  requestType        String    @map("request_type")
-  scopeType          String    @map("scope_type")
+  requesterTeamId    String              @map("requester_team_id")
+  campaignName       String?             @map("campaign_name")
+  requestType        String              @map("request_type")
+  scopeType          String              @map("scope_type")
   priority           String
-  desiredLiveDate    DateTime? @map("desired_live_date")
-  brief              String?   @db.LongText
+  desiredLiveDate    DateTime?           @map("desired_live_date")
+  brief              String?             @db.LongText
   status             String
-  backendStartDate   DateTime? @map("backend_start_date")
-  backendEndDate     DateTime? @map("backend_end_date")
-  frontendStartDate  DateTime? @map("frontend_start_date")
-  frontendEndDate    DateTime? @map("frontend_end_date")
-  businessValueScore Int?      @map("business_value_score")
-  userImpactScore    Int?      @map("user_impact_score")
-  urgencyScore       Int?      @map("urgency_score")
-  valueNote          String?   @map("value_note") @db.LongText
-  comment            String?   @db.LongText
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
-  requesterTeam      Team      @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
-  project            Project?
+  backendStartDate   DateTime?           @map("backend_start_date")
+  backendEndDate     DateTime?           @map("backend_end_date")
+  frontendStartDate  DateTime?           @map("frontend_start_date")
+  frontendEndDate    DateTime?           @map("frontend_end_date")
+  businessValueScore Int?                @map("business_value_score")
+  userImpactScore    Int?                @map("user_impact_score")
+  urgencyScore       Int?                @map("urgency_score")
+  valueNote          String?             @map("value_note") @db.LongText
+  comment            String?             @db.LongText
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  requesterTeam      Team                @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
+  ownerUser          User?               @relation("RequestOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  project            Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  events             ProjectEvent[]
+  assignments        RequestAssignment[]
 
   @@index([requesterTeamId])
+  @@index([projectId])
+  @@index([ownerUserId])
   @@index([status])
   @@index([priority])
   @@map("requests")
 }
 
 model Project {
-  id                  String    @id @default(cuid())
-  projectCode         String    @unique @map("project_code")
-  requestId           String?   @unique @map("request_id")
+  id                  String              @id @default(cuid())
+  projectCode         String              @unique @map("project_code")
   name                String
-  requesterTeamId     String    @map("requester_team_id")
-  pmOwnerId           String?   @map("pm_owner_id")
-  projectType         String    @map("project_type")
-  scopeType           String    @map("scope_type")
+  requesterTeamId     String              @map("requester_team_id")
+  pmOwnerId           String?             @map("pm_owner_id")
+  projectType         String              @map("project_type")
+  scopeType           String              @map("scope_type")
   status              String
-  businessPriority    String    @map("business_priority")
-  riskLevel           String?   @map("risk_level")
-  requestedLiveDate   DateTime? @map("requested_live_date")
-  plannedStartDate    DateTime? @map("planned_start_date")
-  plannedLiveDate     DateTime? @map("planned_live_date")
-  actualStartDate     DateTime? @map("actual_start_date")
-  actualLiveDate      DateTime? @map("actual_live_date")
-  backendStartDate    DateTime? @map("backend_start_date")
-  backendEndDate      DateTime? @map("backend_end_date")
-  frontendStartDate   DateTime? @map("frontend_start_date")
-  frontendEndDate     DateTime? @map("frontend_end_date")
-  currentScopeVersion String?   @map("current_scope_version")
-  scopeChangeCount    Int       @default(0) @map("scope_change_count")
-  blockerCount        Int       @default(0) @map("blocker_count")
-  incidentCount       Int       @default(0) @map("incident_count")
-  chatGroupUrl        String?   @map("chat_group_url")
-  repoUrl             String?   @map("repo_url")
-  notes               String?   @db.LongText
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @updatedAt @map("updated_at")
-  request             Request?  @relation(fields: [requestId], references: [id], onDelete: SetNull)
-  requesterTeam       Team      @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
-  pmOwner             User?     @relation("ProjectPmOwner", fields: [pmOwnerId], references: [id], onDelete: SetNull)
+  businessPriority    String              @map("business_priority")
+  riskLevel           String?             @map("risk_level")
+  requestedLiveDate   DateTime?           @map("requested_live_date")
+  plannedStartDate    DateTime?           @map("planned_start_date")
+  plannedLiveDate     DateTime?           @map("planned_live_date")
+  actualStartDate     DateTime?           @map("actual_start_date")
+  actualLiveDate      DateTime?           @map("actual_live_date")
+  backendStartDate    DateTime?           @map("backend_start_date")
+  backendEndDate      DateTime?           @map("backend_end_date")
+  frontendStartDate   DateTime?           @map("frontend_start_date")
+  frontendEndDate     DateTime?           @map("frontend_end_date")
+  currentScopeVersion String?             @map("current_scope_version")
+  scopeChangeCount    Int                 @default(0) @map("scope_change_count")
+  blockerCount        Int                 @default(0) @map("blocker_count")
+  incidentCount       Int                 @default(0) @map("incident_count")
+  chatGroupUrl        String?             @map("chat_group_url")
+  repoUrl             String?             @map("repo_url")
+  notes               String?             @db.LongText
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+  requests            Request[]
+  requesterTeam       Team                @relation(fields: [requesterTeamId], references: [id], onDelete: Restrict)
+  pmOwner             User?               @relation("ProjectPmOwner", fields: [pmOwnerId], references: [id], onDelete: SetNull)
+  events              ProjectEvent[]
+  requestAssignments  RequestAssignment[]
   allocations         ProjectAllocation[]
   incidents           Incident[]
   artifacts           ProjectArtifact[]
@@ -169,6 +180,127 @@ model Project {
   @@index([status])
   @@index([businessPriority])
   @@map("projects")
+}
+
+model ProjectEvent {
+  id               String   @id @default(cuid())
+  projectId        String   @map("project_id")
+  requestId        String?  @map("request_id")
+  actorUserId      String?  @map("actor_user_id")
+  eventType        String   @map("event_type")
+  eventTitle       String   @map("event_title")
+  eventDescription String?  @map("event_description") @db.LongText
+  eventAt          DateTime @map("event_at")
+  sourceType       String?  @map("source_type")
+  metadataJson     Json?    @map("metadata_json")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  request          Request? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  actorUser        User?    @relation("ProjectEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, eventAt])
+  @@index([requestId, eventAt])
+  @@index([actorUserId])
+  @@index([eventType])
+  @@map("project_events")
+}
+
+model RequestAssignment {
+  id               String                          @id @default(cuid())
+  requestId        String                          @map("request_id")
+  projectId        String                          @map("project_id")
+  memberId         String                          @map("member_id")
+  roleType         String                          @map("role_type")
+  workType         String?                         @map("work_type")
+  uncertaintyLevel Int?                            @map("uncertainty_level")
+  plannedMd        Float?                          @map("planned_md")
+  actualMd         Float?                          @map("actual_md")
+  startDate        DateTime?                       @map("start_date")
+  endDate          DateTime?                       @map("end_date")
+  status           String?
+  note             String?                         @db.LongText
+  createdAt        DateTime                        @default(now()) @map("created_at")
+  updatedAt        DateTime                        @updatedAt @map("updated_at")
+  request          Request                         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  project          Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  member           User                            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  feProfile        RequestAssignmentFeProfile?
+  beProfile        RequestAssignmentBeProfile?
+  systemProfile    RequestAssignmentSystemProfile?
+
+  @@index([requestId])
+  @@index([projectId])
+  @@index([memberId])
+  @@index([startDate, endDate])
+  @@index([status])
+  @@index([workType])
+  @@index([uncertaintyLevel])
+  @@map("request_assignments")
+}
+
+model RequestAssignmentFeProfile {
+  assignmentId     String            @id @map("assignment_id")
+  screensViews     Int?              @map("screens_views")
+  layoutComplexity Int?              @map("layout_complexity")
+  componentReuse   Int?              @map("component_reuse")
+  responsive       Boolean?
+  animationLevel   Int?              @map("animation_level")
+  userActions      Int?              @map("user_actions")
+  userActionsList  String?           @map("user_actions_list") @db.LongText
+  apiComplexity    Int?              @map("api_complexity")
+  clientSideLogic  Int?              @map("client_side_logic")
+  heavyAssets      Boolean?          @map("heavy_assets")
+  uiClarity        Int?              @map("ui_clarity")
+  specChangeRisk   Int?              @map("spec_change_risk")
+  deviceSupport    Int?              @map("device_support")
+  timelinePressure Int?              @map("timeline_pressure")
+  note             String?           @db.LongText
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  assignment       RequestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("request_assignment_fe_profiles")
+}
+
+model RequestAssignmentBeProfile {
+  assignmentId            String            @id @map("assignment_id")
+  userActions             Int?              @map("user_actions")
+  businessLogicComplexity Int?              @map("business_logic_complexity")
+  dbTables                Int?              @map("db_tables")
+  apis                    Int?
+  requirementClarity      Int?              @map("requirement_clarity")
+  changeFrequency         Int?              @map("change_frequency")
+  realtime                Boolean?
+  timelinePressure        Int?              @map("timeline_pressure")
+  note                    String?           @db.LongText
+  createdAt               DateTime          @default(now()) @map("created_at")
+  updatedAt               DateTime          @updatedAt @map("updated_at")
+  assignment              RequestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("request_assignment_be_profiles")
+}
+
+model RequestAssignmentSystemProfile {
+  assignmentId            String            @id @map("assignment_id")
+  domainComplexity        Int?              @map("domain_complexity")
+  integrationCount        Int?              @map("integration_count")
+  dependencyLevel         Int?              @map("dependency_level")
+  requirementClarity      Int?              @map("requirement_clarity")
+  unknownFactor           Int?              @map("unknown_factor")
+  dataVolume              Int?              @map("data_volume")
+  scalabilityRequirement  Int?              @map("scalability_requirement")
+  securityRequirement     Int?              @map("security_requirement")
+  externalApiComplexity   Int?              @map("external_api_complexity")
+  changeFrequency         Int?              @map("change_frequency")
+  testingComplexity       Int?              @map("testing_complexity")
+  timelinePressure        Int?              @map("timeline_pressure")
+  note                    String?           @db.LongText
+  createdAt               DateTime          @default(now()) @map("created_at")
+  updatedAt               DateTime          @updatedAt @map("updated_at")
+  assignment              RequestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("request_assignment_system_profiles")
 }
 
 model ProjectAllocation {
@@ -196,24 +328,24 @@ model ProjectAllocation {
 }
 
 model Incident {
-  id                String    @id @default(cuid())
-  incidentCode      String    @unique @map("incident_code")
-  projectId         String    @map("project_id")
-  foundAt           DateTime  @map("found_at")
+  id                String   @id @default(cuid())
+  incidentCode      String   @unique @map("incident_code")
+  projectId         String   @map("project_id")
+  foundAt           DateTime @map("found_at")
   severity          String
   domain            String
-  impactDescription String    @map("impact_description") @db.LongText
-  resolvers         String?   @db.LongText
-  background        String?   @db.LongText
-  solution          String?   @db.LongText
-  processingMinutes Int?      @map("processing_minutes")
+  impactDescription String   @map("impact_description") @db.LongText
+  resolvers         String?  @db.LongText
+  background        String?  @db.LongText
+  solution          String?  @db.LongText
+  processingMinutes Int?     @map("processing_minutes")
   tag               String?
   status            String
-  ownerMemberId     String?   @map("owner_member_id")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
-  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  ownerMember       User?     @relation("IncidentOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  ownerMemberId     String?  @map("owner_member_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ownerMember       User?    @relation("IncidentOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
   @@index([foundAt])
@@ -224,19 +356,19 @@ model Incident {
 }
 
 model ProjectArtifact {
-  id          String   @id @default(cuid())
-  projectId   String   @map("project_id")
-  artifactType String  @map("artifact_type")
-  title       String
-  contentText String?  @map("content_text") @db.LongText
-  fileUrl     String?  @map("file_url")
-  mimeType    String?  @map("mime_type")
-  uploadedBy  String?  @map("uploaded_by")
-  isFinal     Boolean  @default(false) @map("is_final")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  uploader    User?    @relation("ArtifactUploader", fields: [uploadedBy], references: [id], onDelete: SetNull)
+  id           String   @id @default(cuid())
+  projectId    String   @map("project_id")
+  artifactType String   @map("artifact_type")
+  title        String
+  contentText  String?  @map("content_text") @db.LongText
+  fileUrl      String?  @map("file_url")
+  mimeType     String?  @map("mime_type")
+  uploadedBy   String?  @map("uploaded_by")
+  isFinal      Boolean  @default(false) @map("is_final")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploader     User?    @relation("ArtifactUploader", fields: [uploadedBy], references: [id], onDelete: SetNull)
 
   @@index([projectId])
   @@index([artifactType])

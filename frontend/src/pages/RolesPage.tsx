@@ -25,12 +25,15 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useDataProvider } from '@/providers/dataProvider';
 import type { DataProviderError } from '@/providers/dataProvider';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDateTime } from '@/utils/format';
 
 const { Paragraph, Text } = Typography;
@@ -123,6 +126,15 @@ export default function RolesPage() {
   const [availablePermissions, setAvailablePermissions] = useState<PermissionRecord[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm<RoleFormValues>();
+  const [exporting, setExporting] = useState(false);
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'roles-visible-filters',
+    ['search', 'systemState'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'roles-visible-columns',
+    ['name', 'code', 'description', 'permissions', 'createdAt'],
+  );
 
   const table = useCrudTable<RoleRecord>({
     resource: 'roles',
@@ -299,6 +311,15 @@ export default function RolesPage() {
     [],
   );
 
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
+  );
+
   function openCreateDrawer() {
     setEditingRoleId(null);
     setSelectedRole(null);
@@ -418,6 +439,77 @@ export default function RolesPage() {
     });
   }, [filterValues.search, filterValues.systemState, table.rows]);
 
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'search',
+        label: 'Search',
+        node: (
+          <Input
+            allowClear
+            placeholder="Search role name, code, description"
+            style={{ width: 280 }}
+            value={(filterValues.search as string | undefined) ?? ''}
+            onChange={(event) =>
+              setFilterValues((current) => ({
+                ...current,
+                search: event.target.value || undefined,
+              }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'systemState',
+        label: 'Role Type',
+        node: (
+          <Select
+            allowClear
+            placeholder="Role type"
+            style={{ width: 160 }}
+            value={filterValues.systemState as string | undefined}
+            options={[
+              { label: 'System role', value: 'system' },
+              { label: 'Custom role', value: 'custom' },
+            ]}
+            onChange={(value) =>
+              setFilterValues((current) => ({
+                ...current,
+                systemState: value,
+              }))
+            }
+          />
+        ),
+      },
+    ],
+    [filterValues.search, filterValues.systemState],
+  );
+
+  const exportColumns = useMemo<CsvColumnDefinition<RoleRecord>[]>(
+    () => [
+      { key: 'name', label: 'Role Name', getValue: (record) => record.name },
+      { key: 'code', label: 'Code', getValue: (record) => record.code },
+      { key: 'description', label: 'Description', getValue: (record) => record.description ?? '' },
+      { key: 'permissions', label: 'Permissions', getValue: (record) => record.permissions.length },
+      { key: 'createdAt', label: 'Created At', getValue: (record) => formatDateTime(record.createdAt) },
+    ],
+    [],
+  );
+
+  async function handleExport() {
+    setExporting(true);
+
+    try {
+      const selectedColumns = exportColumns.filter((column) => visibleColumnKeys.includes(column.key));
+      downloadCsv(buildCsvFileName('roles'), selectedColumns, filteredRows);
+      message.success('Roles exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export roles.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <PermissionBoundary allowed={canView}>
       <ResourcePageLayout
@@ -437,36 +529,20 @@ export default function RolesPage() {
           </Space>
         }
         filters={
-          <Space wrap>
-            <Input
-              allowClear
-              placeholder="Search role name, code, description"
-              style={{ width: 280 }}
-              value={(filterValues.search as string | undefined) ?? ''}
-              onChange={(event) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  search: event.target.value || undefined,
-                }))
-              }
-            />
-            <Select
-              allowClear
-              placeholder="Role type"
-              style={{ width: 160 }}
-              value={filterValues.systemState as string | undefined}
-              options={[
-                { label: 'System role', value: 'system' },
-                { label: 'Custom role', value: 'custom' },
-              ]}
-              onChange={(value) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  systemState: value,
-                }))
-              }
-            />
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={columns.map((column) => ({
+              key: String(column.key ?? ''),
+              label: typeof column.title === 'string' ? column.title : String(column.key ?? ''),
+              alwaysVisible: String(column.key ?? '') === 'actions',
+            }))}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -485,7 +561,7 @@ export default function RolesPage() {
 
         <Table<RoleRecord>
           rowKey="id"
-          columns={columns}
+          columns={visibleColumns}
           dataSource={filteredRows}
           loading={table.loading}
           onChange={table.handleTableChange}

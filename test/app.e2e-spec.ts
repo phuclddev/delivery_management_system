@@ -23,5 +23,8 @@ describe('AppController (e2e)', () => {
   it('/api/health (GET)', async () => {
     await request(app.getHttpServer()).get('/api/health').expect(200);
   });
-});
 
+  it('/api/requests (GET) requires auth', async () => {
+    await request(app.getHttpServer()).get('/api/requests').expect(401);
+  });
+});

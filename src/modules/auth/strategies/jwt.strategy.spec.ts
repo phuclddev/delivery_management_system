@@ -57,12 +57,18 @@ describe('JwtStrategy', () => {
       strategy.validate({
         sub: 'user-1',
         email: 'admin@garena.vn',
+        is_impersonation: true,
+        impersonated_by: 'admin-user',
+        impersonated_by_email: 'dinhphuc.luu@garena.vn',
       }),
     ).resolves.toEqual({
       userId: 'user-1',
       email: 'admin@garena.vn',
       roles: ['admin'],
       permissions: ['requests:view'],
+      isImpersonation: true,
+      impersonatedBy: 'admin-user',
+      impersonatedByEmail: 'dinhphuc.luu@garena.vn',
     });
   });
 
@@ -93,4 +99,3 @@ describe('JwtStrategy', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
-

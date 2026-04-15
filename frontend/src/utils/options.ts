@@ -53,6 +53,28 @@ export const allocationRoleOptions: SelectOption[] = [
   { label: 'Designer', value: 'designer' },
 ];
 
+export const requestAssignmentStatusOptions: SelectOption[] = [
+  { label: 'Planned', value: 'planned' },
+  { label: 'In Progress', value: 'in_progress' },
+  { label: 'Blocked', value: 'blocked' },
+  { label: 'Done', value: 'done' },
+  { label: 'On Hold', value: 'on_hold' },
+];
+
+export const requestAssignmentWorkTypeOptions: SelectOption[] = [
+  { label: 'Frontend', value: 'frontend' },
+  { label: 'Backend', value: 'backend' },
+  { label: 'System', value: 'system' },
+];
+
+export const uncertaintyLevelOptions: SelectOption[] = [
+  { label: '1 - Very clear', value: '1' },
+  { label: '2 - Clear', value: '2' },
+  { label: '3 - Moderate', value: '3' },
+  { label: '4 - Uncertain', value: '4' },
+  { label: '5 - Very uncertain', value: '5' },
+];
+
 export const incidentSeverityOptions: SelectOption[] = [
   { label: 'Low', value: 'low' },
   { label: 'Medium', value: 'medium' },
@@ -88,3 +110,26 @@ export const leaveTypeOptions: SelectOption[] = [
   { label: 'Work From Home', value: 'wfh' },
 ];
 
+export const projectEventTypeOptions: SelectOption[] = [
+  { label: 'Request Created', value: 'request_created' },
+  { label: 'PRD Received', value: 'prd_received' },
+  { label: 'Design Received', value: 'design_received' },
+  { label: 'Estimate Done', value: 'estimate_done' },
+  { label: 'Development Started', value: 'development_started' },
+  { label: 'Backend Handover', value: 'backend_handover' },
+  { label: 'Frontend Handover', value: 'frontend_handover' },
+  { label: 'UAT Sent', value: 'uat_sent' },
+  { label: 'UAT Feedback Received', value: 'uat_feedback_received' },
+  { label: 'Live', value: 'live' },
+  { label: 'Monitoring Started', value: 'monitoring_started' },
+  { label: 'Incident Opened', value: 'incident_opened' },
+  { label: 'Incident Resolved', value: 'incident_resolved' },
+  { label: 'Scope Changed', value: 'scope_changed' },
+];
+
+export const projectEventSourceOptions: SelectOption[] = [
+  { label: 'Manual', value: 'manual' },
+  { label: 'System', value: 'system' },
+  { label: 'Import', value: 'import' },
+  { label: 'Sync', value: 'sync' },
+];

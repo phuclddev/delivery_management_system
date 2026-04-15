@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -110,34 +111,102 @@ export class AuthService {
       accessToken: await this.jwtService.signAsync(jwtPayload),
       tokenType: 'Bearer',
       user: this.toUserProfile(user),
+      session: {
+        isImpersonation: false,
+        impersonatedBy: null,
+      },
     };
   }
 
-  async me(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-      include: {
-        team: true,
-        userRoles: {
-          include: {
-            role: true,
+  async me(authenticatedUser: JwtPayloadToAuthenticatedUser) {
+    const user = await this.getActiveUserProfileOrThrow(authenticatedUser.userId);
+    const impersonator = authenticatedUser.impersonatedBy
+      ? await this.prisma.user.findUnique({
+          where: {
+            id: authenticatedUser.impersonatedBy,
           },
-        },
-      },
-    });
-
-    if (!user) {
-      throw new UnauthorizedException('Authenticated user no longer exists.');
-    }
-
-    if (user.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException('User account is inactive.');
-    }
+          select: {
+            id: true,
+            email: true,
+            displayName: true,
+          },
+        })
+      : null;
 
     return {
       user: this.toUserProfile(user),
+      session: {
+        isImpersonation: authenticatedUser.isImpersonation ?? false,
+        impersonatedBy: impersonator,
+      },
+    };
+  }
+
+  async impersonate(requestUser: JwtPayloadToAuthenticatedUser, targetUserId: string) {
+    if (!requestUser.roles?.includes(SUPER_ADMIN_ROLE_CODE)) {
+      this.logger.warn(
+        `Rejected impersonation attempt by ${requestUser.email} because the account is not super_admin.`,
+      );
+      throw new ForbiddenException('Only super_admin can impersonate another user.');
+    }
+
+    if (!targetUserId) {
+      throw new BadRequestException('Target user id is required.');
+    }
+
+    if (requestUser.userId === targetUserId) {
+      throw new BadRequestException('You cannot impersonate your own account.');
+    }
+
+    const [targetUser, impersonator] = await Promise.all([
+      this.getActiveUserProfileOrThrow(targetUserId),
+      this.prisma.user.findUnique({
+        where: {
+          id: requestUser.userId,
+        },
+        select: {
+          id: true,
+          email: true,
+          displayName: true,
+        },
+      }),
+    ]);
+
+    if (!impersonator) {
+      throw new UnauthorizedException('Authenticated user no longer exists.');
+    }
+
+    const jwtPayload: JwtPayload = {
+      sub: targetUser.id,
+      email: targetUser.email,
+      is_impersonation: true,
+      impersonated_by: impersonator.id,
+      impersonated_by_email: impersonator.email,
+    };
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'auth.impersonation.started',
+        impersonatedBy: {
+          id: impersonator.id,
+          email: impersonator.email,
+        },
+        targetUser: {
+          id: targetUser.id,
+          email: targetUser.email,
+        },
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    return {
+      accessToken: await this.jwtService.signAsync(jwtPayload),
+      tokenType: 'Bearer',
+      user: this.toUserProfile(targetUser),
+      session: {
+        isImpersonation: true,
+        impersonatedBy: impersonator,
+      },
     };
   }
 
@@ -224,6 +293,32 @@ export class AuthService {
     this.logger.log(`super_admin role ensured for user ${userId}.`);
   }
 
+  private async getActiveUserProfileOrThrow(userId: string): Promise<AuthUserProfile> {
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+      include: {
+        team: true,
+        userRoles: {
+          include: {
+            role: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Authenticated user no longer exists.');
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('User account is inactive.');
+    }
+
+    return user;
+  }
+
   private toUserProfile(user: AuthUserProfile) {
     return {
       id: user.id,
@@ -246,3 +341,11 @@ export class AuthService {
     };
   }
 }
+
+type JwtPayloadToAuthenticatedUser = {
+  userId: string;
+  email: string;
+  roles?: string[];
+  isImpersonation?: boolean;
+  impersonatedBy?: string;
+};

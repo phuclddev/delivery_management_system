@@ -23,6 +23,14 @@ export class CreateRequestDto {
   @IsString()
   requesterTeamId!: string;
 
+  @ApiPropertyOptional({
+    example: 'project_cuid_here',
+    description: 'Optional linked project. Request.projectId is the new source of truth.',
+  })
+  @IsOptional()
+  @IsString()
+  projectId?: string;
+
   @ApiPropertyOptional({ example: 'Q3 Growth Push' })
   @IsOptional()
   @IsString()

@@ -44,6 +44,11 @@ export class ProjectsController {
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'teamId', required: false })
   @ApiQuery({ name: 'priority', required: false, description: 'Maps to businessPriority.' })
+  @ApiQuery({ name: 'pmOwnerId', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortOrder', required: false })
   @ApiOkResponse({ description: 'List projects with optional filters.' })
   findAll(@Query() query: ProjectQueryDto) {
     return this.projectsService.findAll(query);
@@ -71,4 +76,3 @@ export class ProjectsController {
     return this.projectsService.remove(id);
   }
 }
-

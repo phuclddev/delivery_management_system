@@ -1,5 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, Request } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRequestDto } from './dto/create-request.dto';
 import { RequestQueryDto } from './dto/request-query.dto';
@@ -36,27 +37,36 @@ export class RequestsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(payload: CreateRequestDto) {
+  async create(payload: CreateRequestDto, authenticatedUser: AuthenticatedUser) {
     await this.ensureTeamExists(payload.requesterTeamId);
+    await this.ensureLinkedProjectExists(payload.projectId);
 
-    const request = await this.prisma.request.create({
-      data: this.toCreateRequestData(payload),
-      include: requestDetailInclude,
-    });
+    let request: RequestDetail;
+
+    try {
+      request = await this.prisma.request.create({
+        data: this.toCreateRequestData(payload, authenticatedUser.userId),
+        include: requestDetailInclude,
+      });
+    } catch (error) {
+      this.handleWriteError(error, payload.requestCode);
+    }
 
     return { data: this.toResponse(request) };
   }
 
-  async findAll(query: RequestQueryDto) {
+  async findAll(query: RequestQueryDto, authenticatedUser: AuthenticatedUser) {
     const page = this.parsePositiveInt(query.page, 1);
     const pageSize = this.clampPageSize(this.parsePositiveInt(query.pageSize, 20));
     const sortBy = this.resolveSortBy(query.sortBy);
     const sortOrder = this.resolveSortOrder(query.sortOrder);
     const where: Prisma.RequestWhereInput = {
+      ...this.buildReadAccessWhere(authenticatedUser),
       status: this.toOptionalString(query.status),
       priority: this.toOptionalString(query.priority),
       requestType: this.toOptionalString(query.requestType),
       requesterTeamId: this.toOptionalString(query.teamId),
+      projectId: this.toOptionalString(query.projectId),
     };
 
     this.logger.debug(
@@ -88,31 +98,39 @@ export class RequestsService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, authenticatedUser: AuthenticatedUser) {
     const request = await this.prisma.request.findUnique({
       where: { id },
       include: requestDetailInclude,
     });
 
-    if (!request) {
+    if (!request || !this.canReadRequest(authenticatedUser, request)) {
       throw new NotFoundException(`Request ${id} was not found.`);
     }
 
     return { data: this.toResponse(request) };
   }
 
-  async update(id: string, payload: UpdateRequestDto) {
-    await this.ensureRequestExists(id);
+  async update(id: string, payload: UpdateRequestDto, authenticatedUser: AuthenticatedUser) {
+    const existingRequest = await this.ensureRequestExists(id);
+    this.ensureCanUpdateRequest(authenticatedUser, existingRequest);
 
     if (payload.requesterTeamId) {
       await this.ensureTeamExists(payload.requesterTeamId);
     }
+    await this.ensureLinkedProjectExists(payload.projectId);
 
-    const request = await this.prisma.request.update({
-      where: { id },
-      data: this.toUpdateRequestData(payload),
-      include: requestDetailInclude,
-    });
+    let request: RequestDetail;
+
+    try {
+      request = await this.prisma.request.update({
+        where: { id },
+        data: this.toUpdateRequestData(payload),
+        include: requestDetailInclude,
+      });
+    } catch (error) {
+      this.handleWriteError(error, payload.requestCode);
+    }
 
     return { data: this.toResponse(request) };
   }
@@ -139,6 +157,125 @@ export class RequestsService {
     return request;
   }
 
+  private buildReadAccessWhere(authenticatedUser: AuthenticatedUser): Prisma.RequestWhereInput {
+    if (this.isRequesterScopedUser(authenticatedUser)) {
+      return {
+        ownerUserId: authenticatedUser.userId,
+      };
+    }
+
+    if (this.hasPermission(authenticatedUser, 'requests:view')) {
+      return {};
+    }
+
+    if (this.hasPermission(authenticatedUser, 'requests:view_own')) {
+      return {
+        ownerUserId: authenticatedUser.userId,
+      };
+    }
+
+    return {
+      id: '__forbidden__',
+    };
+  }
+
+  private canReadRequest(
+    authenticatedUser: AuthenticatedUser,
+    request: Pick<Request, 'ownerUserId'>,
+  ): boolean {
+    if (this.isRequesterScopedUser(authenticatedUser)) {
+      return request.ownerUserId === authenticatedUser.userId;
+    }
+
+    if (this.hasPermission(authenticatedUser, 'requests:view')) {
+      return true;
+    }
+
+    if (this.hasPermission(authenticatedUser, 'requests:view_own')) {
+      return request.ownerUserId === authenticatedUser.userId;
+    }
+
+    return false;
+  }
+
+  private ensureCanUpdateRequest(
+    authenticatedUser: AuthenticatedUser,
+    request: Pick<Request, 'id' | 'ownerUserId'>,
+  ): void {
+    if (this.isRequesterScopedUser(authenticatedUser)) {
+      if (request.ownerUserId === authenticatedUser.userId) {
+        return;
+      }
+
+      this.logger.warn(
+        `Rejected request update for requester ${authenticatedUser.email} on request ${request.id} because the request is owned by another user.`,
+      );
+      throw new NotFoundException(`Request ${request.id} was not found.`);
+    }
+
+    if (this.hasPermission(authenticatedUser, 'requests:update')) {
+      return;
+    }
+
+    if (
+      this.hasPermission(authenticatedUser, 'requests:update_own') &&
+      request.ownerUserId === authenticatedUser.userId
+    ) {
+      return;
+    }
+
+    this.logger.warn(
+      `Rejected request update for user ${authenticatedUser.email} on request ${request.id} because the request is outside the caller scope.`,
+    );
+    throw new NotFoundException(`Request ${request.id} was not found.`);
+  }
+
+  private hasPermission(authenticatedUser: AuthenticatedUser, permission: string): boolean {
+    if (
+      authenticatedUser.roles?.includes('super_admin') ||
+      authenticatedUser.roles?.includes('admin')
+    ) {
+      return true;
+    }
+
+    return (authenticatedUser.permissions ?? []).includes(permission);
+  }
+
+  private isRequesterScopedUser(authenticatedUser: AuthenticatedUser): boolean {
+    const roles = authenticatedUser.roles ?? [];
+
+    if (!roles.includes('requester')) {
+      return false;
+    }
+
+    return !this.isElevatedRole(authenticatedUser);
+  }
+
+  private isElevatedRole(authenticatedUser: AuthenticatedUser): boolean {
+    const roles = authenticatedUser.roles ?? [];
+
+    return (
+      roles.includes('super_admin') ||
+      roles.includes('admin') ||
+      roles.includes('pm')
+    );
+  }
+
+  private handleWriteError(error: unknown, requestCode?: string): never {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'P2002'
+    ) {
+      throw new ConflictException(
+        `Request code ${requestCode ?? 'value'} already exists.`,
+      );
+    }
+
+    throw error;
+  }
+
   private async ensureTeamExists(teamId: string): Promise<void> {
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
@@ -149,9 +286,28 @@ export class RequestsService {
     }
   }
 
-  private toCreateRequestData(payload: CreateRequestDto): Prisma.RequestUncheckedCreateInput {
+  private async ensureLinkedProjectExists(projectId?: string): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} was not found.`);
+    }
+  }
+
+  private toCreateRequestData(
+    payload: CreateRequestDto,
+    ownerUserId: string,
+  ): Prisma.RequestUncheckedCreateInput {
     return {
       requestCode: payload.requestCode,
+      projectId: payload.projectId,
+      ownerUserId,
       title: payload.title,
       requesterTeamId: payload.requesterTeamId,
       campaignName: payload.campaignName,
@@ -178,6 +334,7 @@ export class RequestsService {
   ): Prisma.RequestUncheckedUpdateInput {
     return {
       requestCode: payload.requestCode,
+      projectId: payload.projectId,
       title: payload.title,
       requesterTeamId: payload.requesterTeamId,
       campaignName: payload.campaignName,
@@ -225,6 +382,7 @@ export class RequestsService {
       urgencyScore: request.urgencyScore,
       valueNote: request.valueNote,
       comment: request.comment,
+      projectId: request.projectId,
       project: request.project,
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,

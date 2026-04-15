@@ -12,6 +12,11 @@ export class RequestQueryDto {
   @IsString()
   teamId?: string;
 
+  @ApiPropertyOptional({ example: 'project_cuid_here' })
+  @IsOptional()
+  @IsString()
+  projectId?: string;
+
   @ApiPropertyOptional({ example: 'high' })
   @IsOptional()
   @IsString()

@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -25,6 +26,7 @@ import { CreateRequestDto } from './dto/create-request.dto';
 import { RequestQueryDto } from './dto/request-query.dto';
 import { UpdateRequestDto } from './dto/update-request.dto';
 import { RequestsService } from './requests.service';
+import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 
 @ApiTags('requests')
 @ApiBearerAuth()
@@ -40,14 +42,18 @@ export class RequestsController {
   @RequirePermission('requests:create')
   @ApiBody({ type: CreateRequestDto })
   @ApiOkResponse({ description: 'Create a request.' })
-  create(@Body() payload: CreateRequestDto) {
-    return this.requestsService.create(payload);
+  create(
+    @Body() payload: CreateRequestDto,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    return this.requestsService.create(payload, request.user);
   }
 
   @Get()
-  @RequirePermission('requests:view')
+  @RequirePermission('requests:view', 'requests:view_own')
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'teamId', required: false })
+  @ApiQuery({ name: 'projectId', required: false })
   @ApiQuery({ name: 'priority', required: false })
   @ApiQuery({ name: 'requestType', required: false })
   @ApiQuery({ name: 'page', required: false })
@@ -55,23 +61,33 @@ export class RequestsController {
   @ApiQuery({ name: 'sortBy', required: false })
   @ApiQuery({ name: 'sortOrder', required: false })
   @ApiOkResponse({ description: 'List requests with optional filters.' })
-  findAll(@Query() query: RequestQueryDto) {
-    return this.requestsService.findAll(query);
+  findAll(
+    @Query() query: RequestQueryDto,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    return this.requestsService.findAll(query, request.user);
   }
 
   @Get(':id')
-  @RequirePermission('requests:view')
+  @RequirePermission('requests:view', 'requests:view_own')
   @ApiOkResponse({ description: 'Get a single request.' })
-  findOne(@Param('id') id: string) {
-    return this.requestsService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    return this.requestsService.findOne(id, request.user);
   }
 
   @Patch(':id')
-  @RequirePermission('requests:update')
+  @RequirePermission('requests:update', 'requests:update_own')
   @ApiBody({ type: UpdateRequestDto })
   @ApiOkResponse({ description: 'Update a request.' })
-  update(@Param('id') id: string, @Body() payload: UpdateRequestDto) {
-    return this.requestsService.update(id, payload);
+  update(
+    @Param('id') id: string,
+    @Body() payload: UpdateRequestDto,
+    @Req() request: { user: AuthenticatedUser },
+  ) {
+    return this.requestsService.update(id, payload, request.user);
   }
 
   @Delete(':id')

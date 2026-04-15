@@ -8,6 +8,7 @@ import {
   Empty,
   Form,
   Input,
+  Popconfirm,
   Select,
   Space,
   Spin,
@@ -20,16 +21,21 @@ import {
   EyeOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
+  UserSwitchOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useAuth } from '@/auth/useAuth';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { useReferenceData } from '@/hooks/useReferenceData';
 import { useDataProvider } from '@/providers/dataProvider';
 import type { DataProviderError } from '@/providers/dataProvider';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDateTime } from '@/utils/format';
 
 const { Paragraph, Text } = Typography;
@@ -69,12 +75,14 @@ interface RoleRecord {
 export default function UsersPage() {
   usePageTitle('Users');
   const { message } = App.useApp();
-  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { user, startImpersonation } = useAuth();
   const provider = useDataProvider();
   const { hasPermission } = usePermissions();
   const canView = hasPermission('users:view');
   const canManageRoles = hasPermission('users:manage');
   const canViewRoles = hasPermission('roles:view');
+  const isSuperAdmin = user?.roles.some((role) => role.code === 'super_admin') ?? false;
   const { teamOptions } = useReferenceData(user);
 
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
@@ -88,6 +96,15 @@ export default function UsersPage() {
   const [rolesError, setRolesError] = useState<DataProviderError | null>(null);
   const [submittingRoles, setSubmittingRoles] = useState(false);
   const [roleForm] = Form.useForm<{ roleIds: string[] }>();
+  const [exporting, setExporting] = useState(false);
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'users-visible-filters',
+    ['search', 'roleId', 'teamId', 'status'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'users-visible-columns',
+    ['displayName', 'email', 'roles', 'team', 'status', 'createdAt'],
+  );
 
   const table = useCrudTable<UserRecord>({
     resource: 'users',
@@ -248,11 +265,33 @@ export default function UsersPage() {
             >
               View
             </Button>
+            {isSuperAdmin && record.id !== user?.id ? (
+              <Popconfirm
+                title="Start impersonation?"
+                description={`You will switch into ${record.displayName}'s session until you stop impersonation.`}
+                okText="Impersonate"
+                cancelText="Cancel"
+                onConfirm={() => void handleImpersonate(record)}
+              >
+                <Button size="small" icon={<UserSwitchOutlined />}>
+                  Impersonate
+                </Button>
+              </Popconfirm>
+            ) : null}
           </Space>
         ),
       },
     ],
-    [],
+    [isSuperAdmin, user?.id],
+  );
+
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
   );
 
   const roleOptions = useMemo(
@@ -262,6 +301,101 @@ export default function UsersPage() {
         label: role.name,
       })),
     [availableRoles],
+  );
+
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'search',
+        label: 'Search',
+        node: (
+          <Input
+            allowClear
+            placeholder="Search name or email"
+            style={{ width: 240 }}
+            value={(filterValues.search as string | undefined) ?? ''}
+            onChange={(event) =>
+              setFilterValues((current) => ({
+                ...current,
+                search: event.target.value || undefined,
+              }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'roleId',
+        label: 'Role',
+        node: (
+          <Select
+            allowClear
+            placeholder="Role"
+            style={{ width: 180 }}
+            value={filterValues.roleId as string | undefined}
+            options={
+              table.rows
+                .flatMap((entry) => entry.roles)
+                .filter(
+                  (role, index, roles) =>
+                    roles.findIndex((candidate) => candidate.id === role.id) === index,
+                )
+                .map((role) => ({
+                  label: role.name,
+                  value: role.id,
+                }))
+            }
+            onChange={(value) =>
+              setFilterValues((current) => ({
+                ...current,
+                roleId: value,
+              }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'teamId',
+        label: 'Team',
+        node: (
+          <Select
+            allowClear
+            placeholder="Team"
+            style={{ width: 180 }}
+            value={filterValues.teamId as string | undefined}
+            options={teamOptions}
+            onChange={(value) =>
+              setFilterValues((current) => ({
+                ...current,
+                teamId: value,
+              }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        node: (
+          <Select
+            allowClear
+            placeholder="Status"
+            style={{ width: 140 }}
+            value={filterValues.status as string | undefined}
+            options={[
+              { label: 'ACTIVE', value: 'ACTIVE' },
+              { label: 'INACTIVE', value: 'INACTIVE' },
+            ]}
+            onChange={(value) =>
+              setFilterValues((current) => ({
+                ...current,
+                status: value,
+              }))
+            }
+          />
+        ),
+      },
+    ],
+    [filterValues, table.rows, teamOptions],
   );
 
   function openDetailDrawer(userId: string) {
@@ -308,6 +442,63 @@ export default function UsersPage() {
     }
   }
 
+  async function handleImpersonate(record: UserRecord) {
+    try {
+      await startImpersonation(record.id);
+      navigate('/', { replace: true });
+    } catch (error) {
+      message.error(
+        error instanceof Error ? error.message : 'Unable to start impersonation.',
+      );
+    }
+  }
+
+  const filteredRows = useMemo(() => {
+    const search = String(filterValues.search ?? '').trim().toLowerCase();
+    const status = filterValues.status;
+
+    return table.rows.filter((entry) => {
+      const matchesSearch =
+        !search ||
+        entry.displayName.toLowerCase().includes(search) ||
+        entry.email.toLowerCase().includes(search);
+
+      const matchesStatus = !status || entry.status === status;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [filterValues.search, filterValues.status, table.rows]);
+
+  const exportColumns = useMemo<CsvColumnDefinition<UserRecord>[]>(
+    () => [
+      { key: 'displayName', label: 'Name', getValue: (record) => record.displayName },
+      { key: 'email', label: 'Email', getValue: (record) => record.email },
+      {
+        key: 'roles',
+        label: 'Roles',
+        getValue: (record) => record.roles.map((role) => role.name).join(' | '),
+      },
+      { key: 'team', label: 'Team', getValue: (record) => record.team?.name ?? '' },
+      { key: 'status', label: 'Status', getValue: (record) => record.status },
+      { key: 'createdAt', label: 'Created At', getValue: (record) => formatDateTime(record.createdAt) },
+    ],
+    [],
+  );
+
+  async function handleExport() {
+    setExporting(true);
+
+    try {
+      const selectedColumns = exportColumns.filter((column) => visibleColumnKeys.includes(column.key));
+      downloadCsv(buildCsvFileName('users'), selectedColumns, filteredRows);
+      message.success('Users exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export users.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <PermissionBoundary allowed={canView}>
       <ResourcePageLayout
@@ -320,84 +511,25 @@ export default function UsersPage() {
           </Button>
         }
         filters={
-          <Space wrap>
-            <Input
-              allowClear
-              placeholder="Search name or email"
-              style={{ width: 240 }}
-              value={(filterValues.search as string | undefined) ?? ''}
-              onChange={(event) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  search: event.target.value || undefined,
-                }))
-              }
-            />
-            <Select
-              allowClear
-              placeholder="Role"
-              style={{ width: 180 }}
-              value={filterValues.roleId as string | undefined}
-              options={
-                table.rows
-                  .flatMap((entry) => entry.roles)
-                  .filter(
-                    (role, index, roles) =>
-                      roles.findIndex((candidate) => candidate.id === role.id) === index,
-                  )
-                  .map((role) => ({
-                    label: role.name,
-                    value: role.id,
-                  }))
-              }
-              onChange={(value) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  roleId: value,
-                }))
-              }
-            />
-            <Select
-              allowClear
-              placeholder="Team"
-              style={{ width: 180 }}
-              value={filterValues.teamId as string | undefined}
-              options={teamOptions}
-              onChange={(value) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  teamId: value,
-                }))
-              }
-            />
-            <Select
-              allowClear
-              placeholder="Status"
-              style={{ width: 140 }}
-              value={filterValues.status as string | undefined}
-              options={[
-                { label: 'ACTIVE', value: 'ACTIVE' },
-                { label: 'INACTIVE', value: 'INACTIVE' },
-              ]}
-              onChange={(value) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  status: value,
-                }))
-              }
-            />
-            <Button type="primary" onClick={() => table.setFilters(filterValues)}>
-              Apply Filters
-            </Button>
-            <Button
-              onClick={() => {
-                setFilterValues({});
-                table.setFilters({});
-              }}
-            >
-              Reset
-            </Button>
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onApply={() => table.setFilters(filterValues)}
+            onReset={() => {
+              setFilterValues({});
+              table.setFilters({});
+            }}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={columns.map((column) => ({
+              key: String(column.key ?? ''),
+              label: typeof column.title === 'string' ? column.title : String(column.key ?? ''),
+              alwaysVisible: String(column.key ?? '') === 'actions',
+            }))}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -416,20 +548,8 @@ export default function UsersPage() {
 
         <Table<UserRecord>
           rowKey="id"
-          columns={columns}
-          dataSource={table.rows.filter((entry) => {
-            const search = String(filterValues.search ?? '').trim().toLowerCase();
-            const status = filterValues.status;
-
-            const matchesSearch =
-              !search ||
-              entry.displayName.toLowerCase().includes(search) ||
-              entry.email.toLowerCase().includes(search);
-
-            const matchesStatus = !status || entry.status === status;
-
-            return matchesSearch && matchesStatus;
-          })}
+          columns={visibleColumns}
+          dataSource={filteredRows}
           loading={table.loading}
           onChange={table.handleTableChange}
           pagination={table.pagination}

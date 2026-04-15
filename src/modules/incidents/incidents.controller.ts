@@ -6,13 +6,21 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOkResponse,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { CreateIncidentDto } from './dto/create-incident.dto';
+import { IncidentQueryDto } from './dto/incident-query.dto';
 import { UpdateIncidentDto } from './dto/update-incident.dto';
 import { IncidentsService } from './incidents.service';
 
@@ -33,9 +41,20 @@ export class IncidentsController {
 
   @Get()
   @RequirePermission('incidents:view')
+  @ApiQuery({ name: 'projectId', required: false })
+  @ApiQuery({ name: 'ownerMemberId', required: false })
+  @ApiQuery({ name: 'severity', required: false })
+  @ApiQuery({ name: 'domain', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'startDate', required: false })
+  @ApiQuery({ name: 'endDate', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortOrder', required: false })
   @ApiOkResponse({ description: 'List incidents.' })
-  findAll() {
-    return this.incidentsService.findAll();
+  findAll(@Query() query: IncidentQueryDto) {
+    return this.incidentsService.findAll(query);
   }
 
   @Get(':id')
@@ -60,4 +79,3 @@ export class IncidentsController {
     return this.incidentsService.remove(id);
   }
 }
-

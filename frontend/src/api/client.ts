@@ -1,5 +1,9 @@
 import axios from 'axios';
-import { clearStoredToken, getStoredToken } from '@/auth/token-storage';
+import {
+  clearStoredImpersonationState,
+  clearStoredToken,
+  getStoredToken,
+} from '@/auth/token-storage';
 
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api',
@@ -21,6 +25,7 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       clearStoredToken();
+      clearStoredImpersonationState();
     }
 
     return Promise.reject(error);

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -18,12 +18,16 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
+import { ProjectPicker } from '@/components/ProjectPicker';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useAuth } from '@/auth/useAuth';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { useReferenceData } from '@/hooks/useReferenceData';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDate, toDateInputValue, toIsoString } from '@/utils/format';
 import { allocationRoleOptions } from '@/utils/options';
 
@@ -70,7 +74,16 @@ export default function AllocationsPage() {
   const [editingRecord, setEditingRecord] = useState<AllocationRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm();
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'allocations-visible-filters',
+    ['memberId', 'projectId', 'roleType'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'allocations-visible-columns',
+    ['member', 'project', 'roleType', 'startDate', 'endDate', 'allocationPct', 'plannedMd', 'actualMd'],
+  );
 
   const table = useCrudTable<AllocationRecord>({
     resource: 'allocations',
@@ -163,6 +176,135 @@ export default function AllocationsPage() {
     [canDelete, canUpdate],
   );
 
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
+  );
+
+  const exportColumns = useMemo<CsvColumnDefinition<AllocationRecord>[]>(
+    () => [
+      { key: 'member', label: 'Member', getValue: (record) => record.member.displayName },
+      {
+        key: 'project',
+        label: 'Project',
+        getValue: (record) => `${record.project.projectCode} · ${record.project.name}`,
+      },
+      { key: 'roleType', label: 'Role', getValue: (record) => record.roleType },
+      { key: 'startDate', label: 'Start', getValue: (record) => formatDate(record.startDate) },
+      { key: 'endDate', label: 'End', getValue: (record) => formatDate(record.endDate) },
+      { key: 'allocationPct', label: 'Allocation %', getValue: (record) => record.allocationPct },
+      { key: 'plannedMd', label: 'Planned MD', getValue: (record) => record.plannedMd ?? '' },
+      { key: 'actualMd', label: 'Actual MD', getValue: (record) => record.actualMd ?? '' },
+    ],
+    [],
+  );
+
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'memberId',
+        label: 'Member',
+        node: (
+          <Select
+            allowClear
+            placeholder="Member"
+            options={userOptions}
+            style={{ width: 200 }}
+            value={filterValues.memberId as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, memberId: value }))}
+          />
+        ),
+      },
+      {
+        key: 'projectId',
+        label: 'Project',
+        node: (
+          <ProjectPicker
+            allowClear
+            placeholder="Project"
+            options={projectOptions}
+            style={{ width: 220 }}
+            value={filterValues.projectId as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, projectId: value }))}
+          />
+        ),
+      },
+      {
+        key: 'roleType',
+        label: 'Role',
+        node: (
+          <Select
+            allowClear
+            placeholder="Role"
+            options={allocationRoleOptions}
+            style={{ width: 160 }}
+            value={filterValues.roleType as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, roleType: value }))}
+          />
+        ),
+      },
+      {
+        key: 'startDate',
+        label: 'Start Date',
+        node: (
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={(filterValues.startDate as string | undefined) ?? ''}
+            onChange={(event) =>
+              setFilterValues((current) => ({ ...current, startDate: event.target.value || undefined }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'endDate',
+        label: 'End Date',
+        node: (
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={(filterValues.endDate as string | undefined) ?? ''}
+            onChange={(event) =>
+              setFilterValues((current) => ({ ...current, endDate: event.target.value || undefined }))
+            }
+          />
+        ),
+      },
+    ],
+    [filterValues, projectOptions, userOptions],
+  );
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+
+    try {
+      const result = await table.provider.getList<AllocationRecord>({
+        resource: 'allocations',
+        pagination: { current: 1, pageSize: 500 },
+        filters: table.filters,
+        sort: table.sorter.field
+          ? {
+              field: String(table.sorter.field),
+              order: table.sorter.order ?? undefined,
+            }
+          : undefined,
+      });
+
+      const selectedColumns = exportColumns.filter((column) => visibleColumnKeys.includes(column.key));
+      downloadCsv(buildCsvFileName('allocations'), selectedColumns, result.data);
+      message.success('Allocations exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export allocations.');
+    } finally {
+      setExporting(false);
+    }
+  }, [exportColumns, message, table.filters, table.provider, table.sorter.field, table.sorter.order, visibleColumnKeys]);
+
   function openCreateDrawer() {
     setEditingRecord(null);
     form.resetFields();
@@ -242,59 +384,25 @@ export default function AllocationsPage() {
           </Space>
         }
         filters={
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder="Member"
-              options={userOptions}
-              style={{ width: 200 }}
-              value={filterValues.memberId as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, memberId: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Project"
-              options={projectOptions}
-              style={{ width: 220 }}
-              value={filterValues.projectId as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, projectId: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Role"
-              options={allocationRoleOptions}
-              style={{ width: 160 }}
-              value={filterValues.roleType as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, roleType: value }))}
-            />
-            <Input
-              type="date"
-              style={{ width: 150 }}
-              value={(filterValues.startDate as string | undefined) ?? ''}
-              onChange={(event) =>
-                setFilterValues((current) => ({ ...current, startDate: event.target.value || undefined }))
-              }
-            />
-            <Input
-              type="date"
-              style={{ width: 150 }}
-              value={(filterValues.endDate as string | undefined) ?? ''}
-              onChange={(event) =>
-                setFilterValues((current) => ({ ...current, endDate: event.target.value || undefined }))
-              }
-            />
-            <Button type="primary" onClick={() => table.setFilters(filterValues)}>
-              Apply Filters
-            </Button>
-            <Button
-              onClick={() => {
-                setFilterValues({});
-                table.setFilters({});
-              }}
-            >
-              Reset
-            </Button>
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onApply={() => table.setFilters(filterValues)}
+            onReset={() => {
+              setFilterValues({});
+              table.setFilters({});
+            }}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={columns.map((column) => ({
+              key: String(column.key ?? ''),
+              label: typeof column.title === 'string' ? column.title : String(column.key ?? ''),
+              alwaysVisible: String(column.key ?? '') === 'actions',
+            }))}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -313,7 +421,7 @@ export default function AllocationsPage() {
 
         <Table<AllocationRecord>
           rowKey="id"
-          columns={columns}
+          columns={visibleColumns}
           dataSource={table.rows}
           loading={table.loading}
           onChange={table.handleTableChange}
@@ -345,7 +453,7 @@ export default function AllocationsPage() {
             <Select options={userOptions} />
           </Form.Item>
           <Form.Item label="Project" name="projectId" rules={[{ required: true }]}>
-            <Select options={projectOptions} />
+            <ProjectPicker options={projectOptions} placeholder="Select project" />
           </Form.Item>
           <Form.Item label="Role" name="roleType" rules={[{ required: true }]}>
             <Select options={allocationRoleOptions} />

@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Col,
+  Descriptions,
   Empty,
   Grid,
   List,
@@ -48,41 +49,20 @@ import { useAuth } from '@/auth/useAuth';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import type {
+  ProjectEventRecord,
+  ProjectRecord,
+  RequestAssignmentRecord,
+  RequestRecord,
+} from '@/types/domain';
 import { formatDate, formatDateTime } from '@/utils/format';
+import { getProjectRequests } from '@/utils/project-relations';
 
 const { Paragraph, Text } = Typography;
 const { useBreakpoint } = Grid;
 
 const chartColors = ['#0f766e', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6'];
-
-type RequestRecord = {
-  id: string;
-  requestCode: string;
-  title: string;
-  requesterTeam: { id: string; code: string; name: string };
-  campaignName?: string | null;
-  requestType: string;
-  priority: string;
-  desiredLiveDate?: string | null;
-  status: string;
-  businessValueScore?: number | null;
-  urgencyScore?: number | null;
-  createdAt: string;
-};
-
-type ProjectRecord = {
-  id: string;
-  projectCode: string;
-  name: string;
-  requesterTeam: { id: string; code: string; name: string };
-  request?: { id: string; requestCode: string; title: string; status: string } | null;
-  pmOwner?: { id: string; email: string; displayName: string } | null;
-  status: string;
-  businessPriority: string;
-  plannedLiveDate?: string | null;
-  actualLiveDate?: string | null;
-  updatedAt?: string;
-};
+const DELIVERY_TEAM_CODE = 'CODE';
 
 type AllocationRecord = {
   id: string;
@@ -132,6 +112,22 @@ type LeaveRecord = {
   endDate: string;
   note?: string | null;
 };
+
+function overlapsDateWindow(start?: string | null, end?: string | null, targetDate = new Date()) {
+  const startDate = asDate(start);
+  const endDate = asDate(end);
+
+  if (!startDate || !endDate) {
+    return false;
+  }
+
+  const dayStart = new Date(targetDate);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+
+  return startDate < dayEnd && endDate >= dayStart;
+}
 
 function asDate(value?: string | null) {
   if (!value) {
@@ -187,6 +183,10 @@ function countBy<T>(items: T[], accessor: (item: T) => string | null | undefined
     .sort((left, right) => right.value - left.value);
 }
 
+function isDeliveryMemberTeamCode(teamCode?: string | null) {
+  return teamCode === DELIVERY_TEAM_CODE;
+}
+
 function toDeadlineData(requests: RequestRecord[], projects: ProjectRecord[]) {
   const requestDeadlines = requests
     .filter((request) => request.desiredLiveDate)
@@ -227,18 +227,49 @@ export default function DashboardPage() {
   const canSeeAllocations = hasPermission('allocations:view');
   const canSeeIncidents = hasPermission('incidents:view');
   const canSeeLeaves = hasPermission('leaves:view');
+  const canSeeAssignmentWorkload = hasPermission('projects:view');
   const hasOperationalAccess =
-    canSeeRequests || canSeeProjects || canSeeAllocations || canSeeIncidents || canSeeLeaves;
+    canSeeRequests || canSeeProjects || canSeeAssignmentWorkload || canSeeAllocations || canSeeIncidents || canSeeLeaves;
+  const canSeeAtAGlance =
+    canSeeRequests || canSeeProjects || canSeeIncidents || canSeeLeaves || canSeeAssignmentWorkload;
+  const canSeePersonalOperational =
+    canSeeProjects || canSeeAssignmentWorkload || canSeeIncidents || canSeeRequests;
+  const canSeeManagementSnapshot =
+    canSeeRequests || canSeeProjects || canSeeIncidents || canSeeLeaves || canSeeAssignmentWorkload;
+  const canSeeCharts =
+    canSeeIncidents || canSeeAssignmentWorkload || canSeeRequests;
+  const canSeeRecentActivity =
+    canSeeRequests || canSeeIncidents || canSeeLeaves || canSeeProjects;
 
   const requests = dashboard.requests as RequestRecord[];
   const projects = dashboard.projects as ProjectRecord[];
+  const projectEvents = dashboard.projectEvents as ProjectEventRecord[];
+  const requestAssignments = dashboard.requestAssignments as RequestAssignmentRecord[];
   const allocations = dashboard.allocations as AllocationRecord[];
   const incidents = dashboard.incidents as IncidentRecord[];
   const leaves = dashboard.leaves as LeaveRecord[];
 
+  const deliveryAssignments = useMemo(
+    () => requestAssignments.filter((assignment) => isDeliveryMemberTeamCode(assignment.member.team?.code)),
+    [requestAssignments],
+  );
+  const deliveryAllocations = useMemo(
+    () => allocations.filter((allocation) => isDeliveryMemberTeamCode(allocation.member.team?.code)),
+    [allocations],
+  );
+
+  const activeAssignments = useMemo(
+    () => deliveryAssignments.filter((assignment) => overlapsDateWindow(assignment.startDate, assignment.endDate)),
+    [deliveryAssignments],
+  );
+
   const myProjects = useMemo(
     () => projects.filter((project) => project.pmOwner?.id === user?.id).slice(0, 5),
     [projects, user?.id],
+  );
+  const myAssignments = useMemo(
+    () => requestAssignments.filter((assignment) => assignment.member.id === user?.id),
+    [requestAssignments, user?.id],
   );
   const myAllocations = useMemo(
     () => allocations.filter((allocation) => allocation.member.id === user?.id),
@@ -256,14 +287,36 @@ export default function DashboardPage() {
 
   const requestsByStatus = useMemo(() => countBy(requests, (request) => request.status), [requests]);
   const projectsByStatus = useMemo(() => countBy(projects, (project) => project.status), [projects]);
+  const requestsPerProject = useMemo(
+    () =>
+      projects
+        .map((project) => ({
+          name: project.projectCode,
+          value: project.requestsCount ?? getProjectRequests(project).length,
+        }))
+        .filter((item) => item.value > 0)
+        .sort((left, right) => right.value - left.value)
+        .slice(0, 8),
+    [projects],
+  );
   const incidentsBySeverity = useMemo(
     () => countBy(incidents, (incident) => incident.severity),
     [incidents],
+  );
+  const recentTimelineHighlights = useMemo(
+    () =>
+      [...projectEvents]
+        .sort((left, right) => new Date(right.eventAt).getTime() - new Date(left.eventAt).getTime())
+        .slice(0, 6),
+    [projectEvents],
   );
   const activeTeamWorkload = useMemo(() => {
     const counts = new Map<string, { team: string; allocationPct: number; plannedMd: number }>();
 
     for (const allocation of allocations) {
+      if (!isDeliveryMemberTeamCode(allocation.member.team?.code)) {
+        continue;
+      }
       if (!isOverlappingToday(allocation.startDate, allocation.endDate)) {
         continue;
       }
@@ -276,7 +329,50 @@ export default function DashboardPage() {
     }
 
     return Array.from(counts.values()).sort((left, right) => right.allocationPct - left.allocationPct);
-  }, [allocations]);
+  }, [deliveryAllocations]);
+  const assignmentWorkloadByMember = useMemo(() => {
+    const map = new Map<string, { member: string; allocationPct: number; plannedMd: number; actualMd: number }>();
+
+    for (const assignment of activeAssignments) {
+      const entry = map.get(assignment.member.id) ?? {
+        member: assignment.member.displayName || assignment.member.email,
+        allocationPct: 0,
+        plannedMd: 0,
+        actualMd: 0,
+      };
+      entry.plannedMd += assignment.plannedMd ?? 0;
+      entry.actualMd += assignment.actualMd ?? 0;
+      map.set(assignment.member.id, entry);
+    }
+
+    return Array.from(map.values())
+      .map((item) => ({
+        ...item,
+        allocationPct: item.plannedMd * 10,
+      }))
+      .sort((left, right) => right.plannedMd - left.plannedMd)
+      .slice(0, 6);
+  }, [activeAssignments]);
+  const assignmentWorkloadByTeam = useMemo(() => {
+    const map = new Map<string, { team: string; plannedMd: number; actualMd: number; assignments: number }>();
+
+    for (const assignment of activeAssignments) {
+      const teamName =
+        assignment.member.team?.name ?? assignment.project.requesterTeam?.name ?? 'Unassigned';
+      const entry = map.get(teamName) ?? {
+        team: teamName,
+        plannedMd: 0,
+        actualMd: 0,
+        assignments: 0,
+      };
+      entry.plannedMd += assignment.plannedMd ?? 0;
+      entry.actualMd += assignment.actualMd ?? 0;
+      entry.assignments += 1;
+      map.set(teamName, entry);
+    }
+
+    return Array.from(map.values()).sort((left, right) => right.plannedMd - left.plannedMd);
+  }, [activeAssignments]);
 
   const incidentTrend = useMemo(() => {
     const days = Array.from({ length: 7 }).map((_, index) => {
@@ -302,20 +398,27 @@ export default function DashboardPage() {
   }, [incidents]);
 
   const valueVsEffort = useMemo(
-    () =>
-      requests
-        .filter(
-          (request) =>
-            typeof request.businessValueScore === 'number' &&
-            typeof request.urgencyScore === 'number',
-        )
-        .slice(0, 12)
+    () => {
+      const effortByRequest = new Map<string, number>();
+
+      for (const assignment of deliveryAssignments) {
+        effortByRequest.set(
+          assignment.request.id,
+          (effortByRequest.get(assignment.request.id) ?? 0) + (assignment.plannedMd ?? 0),
+        );
+      }
+
+      return requests
+        .filter((request) => typeof request.businessValueScore === 'number')
         .map((request) => ({
           x: request.businessValueScore ?? 0,
-          y: request.urgencyScore ?? 0,
+          y: effortByRequest.get(request.id) ?? 0,
           name: request.requestCode,
-        })),
-    [requests],
+        }))
+        .filter((item) => item.x > 0 || item.y > 0)
+        .slice(0, 12);
+    },
+    [deliveryAssignments, requests],
   );
 
   const recentRequests = useMemo(
@@ -348,11 +451,17 @@ export default function DashboardPage() {
 
   const upcomingDeadlines = useMemo(() => toDeadlineData(requests, projects), [projects, requests]);
   const openRequestsCount = useMemo(
-    () => requests.filter((request) => !['rejected', 'closed'].includes(request.status)).length,
+    () =>
+      requests.filter(
+        (request) => !['rejected', 'closed'].includes((request.status ?? '').toLowerCase()),
+      ).length,
     [requests],
   );
   const activeProjectsCount = useMemo(
-    () => projects.filter((project) => !['delivered', 'cancelled'].includes(project.status)).length,
+    () =>
+      projects.filter(
+        (project) => !['delivered', 'cancelled'].includes((project.status ?? '').toLowerCase()),
+      ).length,
     [projects],
   );
   const incidentsThisWeek = useMemo(
@@ -369,16 +478,21 @@ export default function DashboardPage() {
         .length,
     [myAllocations],
   );
+  const myCurrentAssignments = useMemo(
+    () => myAssignments.filter((assignment) => overlapsDateWindow(assignment.startDate, assignment.endDate)).length,
+    [myAssignments],
+  );
   const totalActiveAllocations = useMemo(
     () =>
-      allocations.filter((allocation) => isOverlappingToday(allocation.startDate, allocation.endDate))
+      deliveryAllocations.filter((allocation) => isOverlappingToday(allocation.startDate, allocation.endDate))
         .length,
-    [allocations],
+    [deliveryAllocations],
   );
+  const totalActiveAssignments = useMemo(() => activeAssignments.length, [activeAssignments]);
   const workloadByMember = useMemo(() => {
     const map = new Map<string, { member: string; allocationPct: number; plannedMd: number }>();
 
-    for (const allocation of allocations) {
+    for (const allocation of deliveryAllocations) {
       if (!isOverlappingToday(allocation.startDate, allocation.endDate)) {
         continue;
       }
@@ -396,10 +510,19 @@ export default function DashboardPage() {
     return Array.from(map.values())
       .sort((left, right) => right.allocationPct - left.allocationPct)
       .slice(0, 6);
-  }, [allocations]);
+  }, [deliveryAllocations]);
 
   const requestColumns: ColumnsType<RequestRecord> = [
-    { title: 'Request', key: 'request', render: (_, record) => `${record.requestCode} · ${record.title}` },
+    {
+      title: 'Request',
+      key: 'request',
+      render: (_, record) => `${record.requestCode} · ${record.title}`,
+    },
+    {
+      title: 'Project',
+      key: 'project',
+      render: (_, record) => record.project ? `${record.project.projectCode} · ${record.project.name}` : '-',
+    },
     { title: 'Team', key: 'team', render: (_, record) => record.requesterTeam.name },
     { title: 'Status', dataIndex: 'status', key: 'status', render: (value) => <Tag>{value}</Tag> },
     { title: 'Deadline', dataIndex: 'desiredLiveDate', key: 'desiredLiveDate', render: (value) => formatDate(value) },
@@ -446,81 +569,114 @@ export default function DashboardPage() {
 
         {!hasOperationalAccess ? (
           <DashboardPanel
-            title="Dashboard unavailable"
-            empty
-            emptyDescription="No dashboard widgets are available for your current role yet."
-          />
+            title="Welcome"
+            minHeight={180}
+          >
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <Paragraph style={{ marginBottom: 0 }}>
+                You are signed in as <Text strong>{user?.displayName ?? user?.email ?? 'current user'}</Text>.
+                This dashboard only shows sections backed by modules your account can view.
+              </Paragraph>
+              <Descriptions
+                bordered
+                size="small"
+                column={1}
+                items={[
+                  {
+                    key: 'email',
+                    label: 'Email',
+                    children: user?.email ?? '-',
+                  },
+                  {
+                    key: 'team',
+                    label: 'Team',
+                    children: user?.team?.name ?? 'Unassigned',
+                  },
+                  {
+                    key: 'roles',
+                    label: 'Roles',
+                    children: user?.roles.map((role) => role.name).join(', ') || 'No role',
+                  },
+                ]}
+              />
+              <Text type="secondary">
+                Ask an administrator for additional view permissions if you need more operational widgets here.
+              </Text>
+            </Space>
+          </DashboardPanel>
         ) : (
           <Space direction="vertical" size="large" style={{ width: '100%' }}>
-            <DashboardSection
-              title="At a Glance"
-              description="Quick indicators that help you understand today’s workload and operational posture."
-            >
-              <Row gutter={[16, 16]}>
-                {canSeeRequests ? (
-                  <Col xs={24} sm={12} xl={8}>
-                    <DashboardMetricCard
-                      label="Open Requests"
-                      value={String(openRequestsCount)}
-                      hint="Request intake still in motion"
-                      icon={<ClockCircleOutlined />}
-                    />
-                  </Col>
-                ) : null}
-                {canSeeProjects ? (
-                  <Col xs={24} sm={12} xl={8}>
-                    <DashboardMetricCard
-                      label="Active Projects"
-                      value={String(activeProjectsCount)}
-                      hint="Projects not yet delivered"
-                      icon={<CheckCircleOutlined />}
-                    />
-                  </Col>
-                ) : null}
-                {canSeeIncidents ? (
-                  <Col xs={24} sm={12} xl={8}>
-                    <DashboardMetricCard
-                      label="Incidents This Week"
-                      value={String(incidentsThisWeek)}
-                      hint="Last 7 days"
-                      icon={<AlertOutlined />}
-                    />
-                  </Col>
-                ) : null}
-                {canSeeLeaves ? (
-                  <Col xs={24} sm={12} xl={8}>
-                    <DashboardMetricCard
-                      label="Members On Leave Today"
-                      value={String(leavesToday)}
-                      hint="Current day overlap"
-                      icon={<CalendarOutlined />}
-                    />
-                  </Col>
-                ) : null}
-                {canSeeAllocations ? (
-                  <Col xs={24} sm={12} xl={8}>
-                    <DashboardMetricCard
-                      label="My Current Allocations"
-                      value={String(myCurrentAllocations)}
-                      hint="Assignments overlapping today"
-                      icon={<PieChartOutlined />}
-                    />
-                  </Col>
-                ) : null}
-                {canSeeAllocations ? (
-                  <Col xs={24} sm={12} xl={8}>
-                    <DashboardMetricCard
-                      label="Total Active Allocations"
-                      value={String(totalActiveAllocations)}
-                      hint="All current assignment rows"
-                      icon={<TeamOutlined />}
-                    />
-                  </Col>
-                ) : null}
-              </Row>
-            </DashboardSection>
+            {canSeeAtAGlance ? (
+              <DashboardSection
+                title="At a Glance"
+                description="Quick indicators that help you understand today’s workload and operational posture."
+              >
+                <Row gutter={[16, 16]}>
+                  {canSeeRequests ? (
+                    <Col xs={24} sm={12} xl={8}>
+                      <DashboardMetricCard
+                        label="Open Requests"
+                        value={String(openRequestsCount)}
+                        hint="Request intake still in motion"
+                        icon={<ClockCircleOutlined />}
+                      />
+                    </Col>
+                  ) : null}
+                  {canSeeProjects ? (
+                    <Col xs={24} sm={12} xl={8}>
+                      <DashboardMetricCard
+                        label="Active Projects"
+                        value={String(activeProjectsCount)}
+                        hint="Projects not yet delivered"
+                        icon={<CheckCircleOutlined />}
+                      />
+                    </Col>
+                  ) : null}
+                  {canSeeIncidents ? (
+                    <Col xs={24} sm={12} xl={8}>
+                      <DashboardMetricCard
+                        label="Incidents This Week"
+                        value={String(incidentsThisWeek)}
+                        hint="Last 7 days"
+                        icon={<AlertOutlined />}
+                      />
+                    </Col>
+                  ) : null}
+                  {canSeeLeaves ? (
+                    <Col xs={24} sm={12} xl={8}>
+                      <DashboardMetricCard
+                        label="Members On Leave Today"
+                        value={String(leavesToday)}
+                        hint="Current day overlap"
+                        icon={<CalendarOutlined />}
+                      />
+                    </Col>
+                  ) : null}
+                  {canSeeAssignmentWorkload ? (
+                    <Col xs={24} sm={12} xl={8}>
+                      <DashboardMetricCard
+                        label="My Current Assignments"
+                        value={String(myCurrentAssignments)}
+                        hint="Request assignments overlapping today"
+                        icon={<PieChartOutlined />}
+                      />
+                    </Col>
+                  ) : null}
+                  {canSeeAssignmentWorkload ? (
+                    <Col xs={24} sm={12} xl={8}>
+                      <DashboardMetricCard
+                        label="Total Active Assignments"
+                        value={String(totalActiveAssignments)}
+                        hint="All active request assignment rows"
+                        icon={<TeamOutlined />}
+                      />
+                    </Col>
+                  ) : null}
+                </Row>
+              </DashboardSection>
+            ) : null}
 
-            {(canSeeProjects || canSeeAllocations || canSeeIncidents || canSeeRequests) ? (
+            {canSeePersonalOperational ? (
               <DashboardSection
                 title="Personal & Operational"
                 description="Your immediate context: ownership, deadlines, and issues connected to current work."
@@ -549,24 +705,24 @@ export default function DashboardPage() {
                       </DashboardPanel>
                     </Col>
                   ) : null}
-                  {canSeeAllocations ? (
+                  {canSeeAssignmentWorkload ? (
                     <Col xs={24} lg={12}>
                       <DashboardPanel
-                        title="My Allocations"
+                        title="My Assignments"
                         loading={dashboard.loading}
-                        empty={!myAllocations.length}
-                        emptyDescription="No allocations are currently linked to your account."
+                        empty={!myAssignments.length}
+                        emptyDescription="No request assignments are currently linked to your account."
                       >
                         <List
-                          dataSource={myAllocations.slice(0, 5)}
-                          renderItem={(allocation) => (
+                          dataSource={myAssignments.slice(0, 5)}
+                          renderItem={(assignment) => (
                             <List.Item>
                               <List.Item.Meta
-                                title={`${allocation.project.projectCode} · ${allocation.project.name}`}
-                                description={`${allocation.roleType} | ${formatDate(allocation.startDate)} to ${formatDate(allocation.endDate)}`}
+                                title={`${assignment.request.requestCode} · ${assignment.member.displayName || assignment.member.email}`}
+                                description={`${assignment.roleType} | ${assignment.project.projectCode} · ${assignment.project.name}`}
                               />
-                              <Tag color={allocation.allocationPct > 100 ? 'red' : 'blue'}>
-                                {allocation.allocationPct}%
+                              <Tag color="blue">
+                                {assignment.plannedMd ?? 0} MD
                               </Tag>
                             </List.Item>
                           )}
@@ -591,6 +747,29 @@ export default function DashboardPage() {
                                 description={`${item.type} | ${item.status}`}
                               />
                               <Text>{formatDate(item.date)}</Text>
+                            </List.Item>
+                          )}
+                        />
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeProjects ? (
+                    <Col xs={24} lg={12}>
+                      <DashboardPanel
+                        title="Project Timeline Highlights"
+                        loading={dashboard.loading}
+                        empty={!recentTimelineHighlights.length}
+                        emptyDescription="No recent project events are available."
+                      >
+                        <List
+                          dataSource={recentTimelineHighlights}
+                          renderItem={(event) => (
+                            <List.Item>
+                              <List.Item.Meta
+                                title={`${event.project.projectCode} · ${event.eventTitle}`}
+                                description={`${formatDateTime(event.eventAt)} | ${event.request?.requestCode ?? 'Project-wide'} | ${event.actorUser?.displayName ?? event.sourceType ?? 'system'}`}
+                              />
+                              <Tag>{event.eventType}</Tag>
                             </List.Item>
                           )}
                         />
@@ -626,7 +805,7 @@ export default function DashboardPage() {
               </DashboardSection>
             ) : null}
 
-            {(canSeeRequests || canSeeProjects || canSeeIncidents || canSeeLeaves || canSeeAllocations) ? (
+            {canSeeManagementSnapshot ? (
               <DashboardSection
                 title="Management Snapshot"
                 description="Aggregated views that help PMs, team leads, and admins spot flow and capacity issues quickly."
@@ -670,6 +849,25 @@ export default function DashboardPage() {
                             <Tooltip />
                             <Legend />
                           </PieChart>
+                        </ResponsiveContainer>
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeProjects ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Requests Per Project"
+                        loading={dashboard.loading}
+                        empty={!requestsPerProject.length}
+                      >
+                        <ResponsiveContainer width="100%" height={280}>
+                          <BarChart data={requestsPerProject}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                            <XAxis dataKey="name" />
+                            <YAxis allowDecimals={false} />
+                            <Tooltip />
+                            <Bar dataKey="value" fill="#2563eb" radius={[8, 8, 0, 0]} />
+                          </BarChart>
                         </ResponsiveContainer>
                       </DashboardPanel>
                     </Col>
@@ -722,23 +920,24 @@ export default function DashboardPage() {
                       </DashboardPanel>
                     </Col>
                   ) : null}
-                  {canSeeAllocations ? (
+                  {canSeeAssignmentWorkload ? (
                     <Col xs={24}>
                       <DashboardPanel
                         title="Workload Summary By Member"
                         loading={dashboard.loading}
-                        empty={!workloadByMember.length}
+                        empty={!assignmentWorkloadByMember.length}
                         minHeight={360}
                       >
                         <ResponsiveContainer width="100%" height={300}>
-                          <BarChart data={workloadByMember} layout="vertical" margin={{ left: 20 }}>
+                          <BarChart data={assignmentWorkloadByMember} layout="vertical" margin={{ left: 20 }}>
                             <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                             <XAxis type="number" />
                             <YAxis type="category" dataKey="member" width={110} />
                             <Tooltip />
                             <Legend />
-                            <Bar dataKey="allocationPct" fill="#0ea5e9" name="Allocation %" radius={[0, 8, 8, 0]} />
+                            <Bar dataKey="allocationPct" fill="#0ea5e9" name="Planned MD x10" radius={[0, 8, 8, 0]} />
                             <Bar dataKey="plannedMd" fill="#0f766e" name="Planned MD" radius={[0, 8, 8, 0]} />
+                            <Bar dataKey="actualMd" fill="#f59e0b" name="Actual MD" radius={[0, 8, 8, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
                       </DashboardPanel>
@@ -748,164 +947,169 @@ export default function DashboardPage() {
               </DashboardSection>
             ) : null}
 
-            <DashboardSection
-              title="Charts"
-              description="Operational signals for leaders and PMs, composed from the current list endpoints."
-            >
-              <Row gutter={[16, 16]}>
-                {canSeeIncidents ? (
-                  <Col xs={24} xl={12}>
-                    <DashboardPanel
-                      title="Incidents Trend Over Time"
-                      loading={dashboard.loading}
-                      empty={!incidentTrend.some((entry) => entry.count > 0)}
-                    >
-                      <ResponsiveContainer width="100%" height={280}>
-                        <LineChart data={incidentTrend}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                          <XAxis dataKey="label" />
-                          <YAxis allowDecimals={false} />
-                          <Tooltip />
-                          <Line type="monotone" dataKey="count" stroke="#ef4444" strokeWidth={3} dot={{ r: 4 }} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-                {canSeeAllocations ? (
-                  <Col xs={24} xl={12}>
-                    <DashboardPanel
-                      title="Team Workload Overview"
-                      loading={dashboard.loading}
-                      empty={!activeTeamWorkload.length}
-                    >
-                      <ResponsiveContainer width="100%" height={280}>
-                        <BarChart data={activeTeamWorkload}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                          <XAxis dataKey="team" />
-                          <YAxis />
-                          <Tooltip />
-                          <Legend />
-                          <Bar dataKey="allocationPct" fill="#0ea5e9" name="Allocation %" radius={[8, 8, 0, 0]} />
-                          <Bar dataKey="plannedMd" fill="#14b8a6" name="Planned MD" radius={[8, 8, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-                {canSeeRequests ? (
-                  <Col xs={24}>
-                    <DashboardPanel
-                      title="Value vs Effort Summary"
-                      loading={dashboard.loading}
-                      empty={!valueVsEffort.length}
-                      emptyDescription="Business value and urgency scores are not available on enough request records yet."
-                    >
-                      <ResponsiveContainer width="100%" height={320}>
-                        <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis type="number" dataKey="x" name="Business Value" />
-                          <YAxis type="number" dataKey="y" name="Urgency" />
-                          <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                          <Scatter name="Requests" data={valueVsEffort} fill="#0f766e" />
-                        </ScatterChart>
-                      </ResponsiveContainer>
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-              </Row>
-            </DashboardSection>
+            {canSeeCharts ? (
+              <DashboardSection
+                title="Charts"
+                description="Operational signals for leaders and PMs, composed from the current list endpoints."
+              >
+                <Row gutter={[16, 16]}>
+                  {canSeeIncidents ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Incidents Trend Over Time"
+                        loading={dashboard.loading}
+                        empty={!incidentTrend.some((entry) => entry.count > 0)}
+                      >
+                        <ResponsiveContainer width="100%" height={280}>
+                          <LineChart data={incidentTrend}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                            <XAxis dataKey="label" />
+                            <YAxis allowDecimals={false} />
+                            <Tooltip />
+                            <Line type="monotone" dataKey="count" stroke="#ef4444" strokeWidth={3} dot={{ r: 4 }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeAssignmentWorkload ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Team Workload Overview"
+                        loading={dashboard.loading}
+                        empty={!assignmentWorkloadByTeam.length}
+                      >
+                        <ResponsiveContainer width="100%" height={280}>
+                          <BarChart data={assignmentWorkloadByTeam}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                            <XAxis dataKey="team" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Bar dataKey="assignments" fill="#0ea5e9" name="Assignments" radius={[8, 8, 0, 0]} />
+                            <Bar dataKey="plannedMd" fill="#14b8a6" name="Planned MD" radius={[8, 8, 0, 0]} />
+                            <Bar dataKey="actualMd" fill="#f59e0b" name="Actual MD" radius={[8, 8, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeRequests ? (
+                    <Col xs={24}>
+                      <DashboardPanel
+                        title="Value vs Effort Summary"
+                        loading={dashboard.loading}
+                        empty={!valueVsEffort.length}
+                        emptyDescription="Business value and urgency scores are not available on enough request records yet."
+                      >
+                        <ResponsiveContainer width="100%" height={320}>
+                          <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis type="number" dataKey="x" name="Business Value" />
+                            <YAxis type="number" dataKey="y" name="Planned MD" />
+                            <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                            <Scatter name="Requests" data={valueVsEffort} fill="#0f766e" />
+                          </ScatterChart>
+                        </ResponsiveContainer>
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                </Row>
+              </DashboardSection>
+            ) : null}
 
-            <DashboardSection
-              title="Recent Activity"
-              description="Fast reference tables for the latest movement across requests, incidents, leaves, and projects."
-            >
-              <Row gutter={[16, 16]}>
-                {canSeeRequests ? (
-                  <Col xs={24} xl={12}>
-                    <DashboardPanel
-                      title="Recent Requests"
-                      loading={dashboard.loading}
-                      empty={!recentRequests.length}
-                      minHeight={360}
-                    >
-                      <Table
-                        rowKey="id"
-                        size="small"
-                        pagination={false}
-                        columns={requestColumns}
-                        dataSource={recentRequests}
-                      />
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-                {canSeeIncidents ? (
-                  <Col xs={24} xl={12}>
-                    <DashboardPanel
-                      title="Recent Incidents"
-                      loading={dashboard.loading}
-                      empty={!recentIncidents.length}
-                      minHeight={360}
-                    >
-                      <Table
-                        rowKey="id"
-                        size="small"
-                        pagination={false}
-                        columns={incidentColumns}
-                        dataSource={recentIncidents}
-                      />
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-                {canSeeLeaves ? (
-                  <Col xs={24} xl={12}>
-                    <DashboardPanel
-                      title="Upcoming Leaves"
-                      loading={dashboard.loading}
-                      empty={!upcomingLeaves.length}
-                      minHeight={320}
-                    >
-                      <Table
-                        rowKey="id"
-                        size="small"
-                        pagination={false}
-                        columns={leaveColumns}
-                        dataSource={upcomingLeaves}
-                      />
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-                {canSeeProjects ? (
-                  <Col xs={24} xl={12}>
-                    <DashboardPanel
-                      title="Latest Project Updates"
-                      loading={dashboard.loading}
-                      empty={!projects.length}
-                      minHeight={320}
-                    >
-                      <List
-                        dataSource={[...projects]
-                          .sort(
-                            (left, right) =>
-                              new Date(right.updatedAt ?? 0).getTime() -
-                              new Date(left.updatedAt ?? 0).getTime(),
-                          )
-                          .slice(0, 5)}
-                        renderItem={(project) => (
-                          <List.Item>
-                            <List.Item.Meta
-                              title={`${project.projectCode} · ${project.name}`}
-                              description={`Status: ${project.status} | Planned live: ${formatDate(project.plannedLiveDate)}`}
-                            />
-                            <Tag>{project.businessPriority}</Tag>
-                          </List.Item>
-                        )}
-                      />
-                    </DashboardPanel>
-                  </Col>
-                ) : null}
-              </Row>
-            </DashboardSection>
+            {canSeeRecentActivity ? (
+              <DashboardSection
+                title="Recent Activity"
+                description="Fast reference tables for the latest movement across requests, incidents, leaves, and projects."
+              >
+                <Row gutter={[16, 16]}>
+                  {canSeeRequests ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Recent Requests"
+                        loading={dashboard.loading}
+                        empty={!recentRequests.length}
+                        minHeight={360}
+                      >
+                        <Table
+                          rowKey="id"
+                          size="small"
+                          pagination={false}
+                          columns={requestColumns}
+                          dataSource={recentRequests}
+                        />
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeIncidents ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Recent Incidents"
+                        loading={dashboard.loading}
+                        empty={!recentIncidents.length}
+                        minHeight={360}
+                      >
+                        <Table
+                          rowKey="id"
+                          size="small"
+                          pagination={false}
+                          columns={incidentColumns}
+                          dataSource={recentIncidents}
+                        />
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeLeaves ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Upcoming Leaves"
+                        loading={dashboard.loading}
+                        empty={!upcomingLeaves.length}
+                        minHeight={320}
+                      >
+                        <Table
+                          rowKey="id"
+                          size="small"
+                          pagination={false}
+                          columns={leaveColumns}
+                          dataSource={upcomingLeaves}
+                        />
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                  {canSeeProjects ? (
+                    <Col xs={24} xl={12}>
+                      <DashboardPanel
+                        title="Latest Project Updates"
+                        loading={dashboard.loading}
+                        empty={!projects.length}
+                        minHeight={320}
+                      >
+                        <List
+                          dataSource={[...projects]
+                            .sort(
+                              (left, right) =>
+                                new Date(right.updatedAt ?? 0).getTime() -
+                                new Date(left.updatedAt ?? 0).getTime(),
+                            )
+                            .slice(0, 5)}
+                          renderItem={(project) => (
+                            <List.Item>
+                              <List.Item.Meta
+                                title={`${project.projectCode} · ${project.name}`}
+                                description={`Status: ${project.status} | Requests: ${project.requestsCount ?? getProjectRequests(project).length} | Planned live: ${formatDate(project.plannedLiveDate)}`}
+                              />
+                              <Tag>{project.businessPriority}</Tag>
+                            </List.Item>
+                          )}
+                        />
+                      </DashboardPanel>
+                    </Col>
+                  ) : null}
+                </Row>
+              </DashboardSection>
+            ) : null}
           </Space>
         )}
       </ResourcePageLayout>

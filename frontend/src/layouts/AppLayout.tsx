@@ -1,4 +1,5 @@
 import {
+  Alert,
   Avatar,
   Breadcrumb,
   Button,
@@ -54,39 +55,72 @@ export function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const screens = useBreakpoint();
-  const { user, logout } = useAuth();
+  const { user, logout, session, impersonationState, isImpersonating, stopImpersonation } =
+    useAuth();
   const { hasPermission } = usePermissions();
+  const roleCodes = new Set((user?.roles ?? []).map((role) => role.code.toLowerCase()));
+  const isElevatedUser = roleCodes.has('super_admin') || roleCodes.has('admin');
   const currentPath = location.pathname === '' ? '/' : location.pathname;
-  const canAccessReports =
-    hasPermission('requests:view') ||
-    hasPermission('projects:view') ||
-    hasPermission('allocations:view') ||
-    hasPermission('incidents:view') ||
-    hasPermission('leaves:view');
 
-  const visibleNavigationItems = navigationItems.filter((item) => {
-    if (item.path === '/') {
+  const canAccessNavigationItem = (path: string) => {
+    if (path === '/') {
       return true;
     }
 
-    if (item.path === '/reports') {
-      return canAccessReports;
+    if (isElevatedUser) {
+      return true;
     }
 
-    const modulePermissionMap: Record<string, string> = {
-      '/requests': 'requests:view',
-      '/projects': 'projects:view',
-      '/allocations': 'allocations:view',
-      '/incidents': 'incidents:view',
-      '/artifacts': 'artifacts:view',
-      '/leaves': 'leaves:view',
-      '/users': 'users:view',
-      '/roles': 'roles:view',
+    if (path === '/requests') {
+      return (
+        hasPermission('requests:view') ||
+        hasPermission('requests:view_own') ||
+        hasPermission('requests:create') ||
+        hasPermission('requests:update') ||
+        hasPermission('requests:update_own')
+      );
+    }
+
+    const roleBasedVisibility: Record<string, string[]> = {
+      '/projects': ['pm', 'dev'],
+      '/allocations': ['pm'],
+      '/incidents': ['pm', 'dev'],
+      '/artifacts': ['pm', 'dev'],
+      '/leaves': [],
+      '/users': [],
+      '/roles': [],
+      '/reports': ['pm'],
     };
 
-    const requiredPermission = modulePermissionMap[item.path];
-    return requiredPermission ? hasPermission(requiredPermission) : true;
+    const allowedRoles = roleBasedVisibility[path];
+
+    if (allowedRoles) {
+      return allowedRoles.some((roleCode) => roleCodes.has(roleCode));
+    }
+
+    return false;
+  };
+
+  const visibleNavigationItems = navigationItems.filter((item) => {
+    if (!canAccessNavigationItem(item.path)) {
+      return false;
+    }
+
+    if (item.path === '/reports') {
+      return (
+        hasPermission('requests:view') ||
+        hasPermission('projects:view') ||
+        hasPermission('allocations:view') ||
+        hasPermission('incidents:view') ||
+        hasPermission('leaves:view')
+      );
+    }
+
+    return true;
   });
+
+  const originalAdmin =
+    impersonationState?.originalAdmin ?? session?.impersonatedBy ?? null;
 
   return (
     <Layout className="app-shell">
@@ -125,6 +159,25 @@ export function AppLayout() {
       </Sider>
 
       <Layout>
+        {isImpersonating && user ? (
+          <Alert
+            type="warning"
+            banner
+            showIcon
+            message={`Impersonation mode: ${user.displayName} (${user.email})`}
+            description={
+              originalAdmin
+                ? `Original admin: ${originalAdmin.displayName} (${originalAdmin.email}). Every action in this session is being performed as the impersonated user.`
+                : 'This session is currently impersonating another user.'
+            }
+            action={
+              <Button type="primary" danger size="small" onClick={() => void stopImpersonation()}>
+                Stop impersonation
+              </Button>
+            }
+          />
+        ) : null}
+
         <Header
           style={{
             background: 'rgba(255,255,255,0.78)',

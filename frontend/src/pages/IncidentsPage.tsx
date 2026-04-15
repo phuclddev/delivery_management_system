@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -18,12 +18,16 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
+import { ProjectPicker } from '@/components/ProjectPicker';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useAuth } from '@/auth/useAuth';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { useReferenceData } from '@/hooks/useReferenceData';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDateTime, toDateTimeInputValue, toIsoString } from '@/utils/format';
 import { incidentDomainOptions, incidentSeverityOptions, incidentStatusOptions } from '@/utils/options';
 
@@ -69,7 +73,16 @@ export default function IncidentsPage() {
   const [editingRecord, setEditingRecord] = useState<IncidentRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm();
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'incidents-visible-filters',
+    ['severity', 'domain', 'status'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'incidents-visible-columns',
+    ['incidentCode', 'project', 'severity', 'domain', 'foundAt', 'status', 'ownerMember'],
+  );
 
   const table = useCrudTable<IncidentRecord>({
     resource: 'incidents',
@@ -133,6 +146,146 @@ export default function IncidentsPage() {
     ],
     [canDelete, canUpdate],
   );
+
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
+  );
+
+  const exportColumns = useMemo<CsvColumnDefinition<IncidentRecord>[]>(
+    () => [
+      { key: 'incidentCode', label: 'Incident Code', getValue: (record) => record.incidentCode },
+      {
+        key: 'project',
+        label: 'Project',
+        getValue: (record) => `${record.project.projectCode} · ${record.project.name}`,
+      },
+      { key: 'severity', label: 'Severity', getValue: (record) => record.severity },
+      { key: 'domain', label: 'Domain', getValue: (record) => record.domain },
+      { key: 'foundAt', label: 'Found At', getValue: (record) => formatDateTime(record.foundAt) },
+      { key: 'status', label: 'Status', getValue: (record) => record.status },
+      { key: 'ownerMember', label: 'Owner', getValue: (record) => record.ownerMember?.displayName ?? '' },
+    ],
+    [],
+  );
+
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'severity',
+        label: 'Severity',
+        node: (
+          <Select
+            allowClear
+            placeholder="Severity"
+            options={incidentSeverityOptions}
+            style={{ width: 150 }}
+            value={filterValues.severity as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, severity: value }))}
+          />
+        ),
+      },
+      {
+        key: 'domain',
+        label: 'Domain',
+        node: (
+          <Select
+            allowClear
+            placeholder="Domain"
+            options={incidentDomainOptions}
+            style={{ width: 150 }}
+            value={filterValues.domain as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, domain: value }))}
+          />
+        ),
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        node: (
+          <Select
+            allowClear
+            placeholder="Status"
+            options={incidentStatusOptions}
+            style={{ width: 150 }}
+            value={filterValues.status as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, status: value }))}
+          />
+        ),
+      },
+      {
+        key: 'foundAtFrom',
+        label: 'Found From',
+        node: (
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={((filterValues.foundAtRange as { from?: string } | undefined)?.from ?? '') as string}
+            onChange={(event) =>
+              setFilterValues((current) => ({
+                ...current,
+                foundAtRange: {
+                  ...(current.foundAtRange as Record<string, unknown> | undefined),
+                  from: event.target.value || undefined,
+                },
+              }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'foundAtTo',
+        label: 'Found To',
+        node: (
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={((filterValues.foundAtRange as { to?: string } | undefined)?.to ?? '') as string}
+            onChange={(event) =>
+              setFilterValues((current) => ({
+                ...current,
+                foundAtRange: {
+                  ...(current.foundAtRange as Record<string, unknown> | undefined),
+                  to: event.target.value || undefined,
+                },
+              }))
+            }
+          />
+        ),
+      },
+    ],
+    [filterValues],
+  );
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+
+    try {
+      const result = await table.provider.getList<IncidentRecord>({
+        resource: 'incidents',
+        pagination: { current: 1, pageSize: 500 },
+        filters: table.filters,
+        sort: table.sorter.field
+          ? {
+              field: String(table.sorter.field),
+              order: table.sorter.order ?? undefined,
+            }
+          : undefined,
+      });
+
+      const selectedColumns = exportColumns.filter((column) => visibleColumnKeys.includes(column.key));
+      downloadCsv(buildCsvFileName('incidents'), selectedColumns, result.data);
+      message.success('Incidents exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export incidents.');
+    } finally {
+      setExporting(false);
+    }
+  }, [exportColumns, message, table.filters, table.provider, table.sorter.field, table.sorter.order, visibleColumnKeys]);
 
   function openCreateDrawer() {
     setEditingRecord(null);
@@ -211,71 +364,25 @@ export default function IncidentsPage() {
           </Space>
         }
         filters={
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder="Severity"
-              options={incidentSeverityOptions}
-              style={{ width: 150 }}
-              value={filterValues.severity as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, severity: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Domain"
-              options={incidentDomainOptions}
-              style={{ width: 150 }}
-              value={filterValues.domain as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, domain: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Status"
-              options={incidentStatusOptions}
-              style={{ width: 150 }}
-              value={filterValues.status as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, status: value }))}
-            />
-            <Input
-              type="date"
-              style={{ width: 150 }}
-              value={((filterValues.foundAtRange as { from?: string } | undefined)?.from ?? '') as string}
-              onChange={(event) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  foundAtRange: {
-                    ...(current.foundAtRange as Record<string, unknown> | undefined),
-                    from: event.target.value || undefined,
-                  },
-                }))
-              }
-            />
-            <Input
-              type="date"
-              style={{ width: 150 }}
-              value={((filterValues.foundAtRange as { to?: string } | undefined)?.to ?? '') as string}
-              onChange={(event) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  foundAtRange: {
-                    ...(current.foundAtRange as Record<string, unknown> | undefined),
-                    to: event.target.value || undefined,
-                  },
-                }))
-              }
-            />
-            <Button type="primary" onClick={() => table.setFilters(filterValues)}>
-              Apply Filters
-            </Button>
-            <Button
-              onClick={() => {
-                setFilterValues({});
-                table.setFilters({});
-              }}
-            >
-              Reset
-            </Button>
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onApply={() => table.setFilters(filterValues)}
+            onReset={() => {
+              setFilterValues({});
+              table.setFilters({});
+            }}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={columns.map((column) => ({
+              key: String(column.key ?? ''),
+              label: typeof column.title === 'string' ? column.title : String(column.key ?? ''),
+              alwaysVisible: String(column.key ?? '') === 'actions',
+            }))}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -293,7 +400,7 @@ export default function IncidentsPage() {
         ) : null}
         <Table<IncidentRecord>
           rowKey="id"
-          columns={columns}
+          columns={visibleColumns}
           dataSource={table.rows}
           loading={table.loading}
           onChange={table.handleTableChange}
@@ -337,7 +444,7 @@ export default function IncidentsPage() {
             <Input placeholder="INC-018" />
           </Form.Item>
           <Form.Item label="Project" name="projectId" rules={[{ required: true }]}>
-            <Select options={projectOptions} />
+            <ProjectPicker options={projectOptions} placeholder="Select project" />
           </Form.Item>
           <Form.Item label="Found at" name="foundAt" rules={[{ required: true }]}>
             <Input type="datetime-local" />

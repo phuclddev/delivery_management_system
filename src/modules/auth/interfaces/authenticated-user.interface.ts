@@ -3,4 +3,7 @@ export interface AuthenticatedUser {
   email: string;
   roles?: string[];
   permissions?: string[];
+  isImpersonation?: boolean;
+  impersonatedBy?: string;
+  impersonatedByEmail?: string;
 }

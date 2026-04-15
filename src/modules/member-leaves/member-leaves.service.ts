@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { MemberLeave, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMemberLeaveDto } from './dto/create-member-leave.dto';
+import { MemberLeaveQueryDto } from './dto/member-leave-query.dto';
 import { UpdateMemberLeaveDto } from './dto/update-member-leave.dto';
 
 const leaveInclude = {
@@ -25,6 +26,14 @@ type LeaveDetail = Prisma.MemberLeaveGetPayload<{
   include: typeof leaveInclude;
 }>;
 
+const sortableLeaveFields = new Set([
+  'startDate',
+  'endDate',
+  'createdAt',
+  'updatedAt',
+  'leaveType',
+]);
+
 @Injectable()
 export class MemberLeavesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -41,13 +50,47 @@ export class MemberLeavesService {
     return { data: this.toResponse(leave) };
   }
 
-  async findAll() {
-    const leaves = await this.prisma.memberLeave.findMany({
-      include: leaveInclude,
-      orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }],
-    });
+  async findAll(query: MemberLeaveQueryDto) {
+    this.validateOptionalDateRange(query.startDate, query.endDate);
+    const page = this.parsePositiveInt(query.page, 1);
+    const pageSize = this.clampPageSize(this.parsePositiveInt(query.pageSize, 20));
+    const sortBy = this.resolveSortBy(query.sortBy);
+    const sortOrder = this.resolveSortOrder(query.sortOrder);
 
-    return { data: leaves.map((leave) => this.toResponse(leave)) };
+    const where: Prisma.MemberLeaveWhereInput = {
+      memberId: this.toOptionalString(query.memberId),
+      leaveType: this.toOptionalString(query.leaveType),
+      ...(query.startDate || query.endDate
+        ? {
+            ...(query.startDate ? { endDate: { gte: new Date(query.startDate) } } : {}),
+            ...(query.endDate ? { startDate: { lte: new Date(query.endDate) } } : {}),
+          }
+        : {}),
+    };
+
+    const [leaves, total] = await this.prisma.$transaction([
+      this.prisma.memberLeave.findMany({
+        where,
+        include: leaveInclude,
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.memberLeave.count({ where }),
+    ]);
+
+    return {
+      data: leaves.map((leave) => this.toResponse(leave)),
+      meta: {
+        page,
+        pageSize,
+        total,
+        sortBy,
+        sortOrder,
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -100,6 +143,14 @@ export class MemberLeavesService {
     }
   }
 
+  private validateOptionalDateRange(startDate?: string, endDate?: string) {
+    if (!startDate || !endDate) {
+      return;
+    }
+
+    this.validateDateRange(startDate, endDate);
+  }
+
   private async ensureMemberExists(memberId: string) {
     const member = await this.prisma.user.findUnique({ where: { id: memberId } });
     if (!member) {
@@ -147,5 +198,38 @@ export class MemberLeavesService {
       updatedAt: leave.updatedAt,
     };
   }
-}
 
+  private toOptionalString(value?: string): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private parsePositiveInt(value: string | undefined, fallback: number): number {
+    if (!value) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private clampPageSize(value: number): number {
+    return Math.min(Math.max(value, 1), 100);
+  }
+
+  private resolveSortBy(value?: string): keyof Prisma.MemberLeaveOrderByWithRelationInput {
+    if (value && sortableLeaveFields.has(value)) {
+      return value as keyof Prisma.MemberLeaveOrderByWithRelationInput;
+    }
+
+    return 'startDate';
+  }
+
+  private resolveSortOrder(value?: string): Prisma.SortOrder {
+    return value?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+  }
+}

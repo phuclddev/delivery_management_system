@@ -141,6 +141,10 @@ describe('AuthService', () => {
     await expect(service.googleLogin({ credential: 'google-id-token' })).resolves.toEqual({
       accessToken: 'signed-jwt',
       tokenType: 'Bearer',
+      session: {
+        isImpersonation: false,
+        impersonatedBy: null,
+      },
       user: {
         id: 'user-1',
         email: 'admin@garena.vn',
@@ -194,7 +198,12 @@ describe('AuthService', () => {
       userRoles: [],
     });
 
-    await expect(service.me('user-1')).resolves.toEqual({
+    await expect(
+      service.me({
+        userId: 'user-1',
+        email: 'admin@garena.vn',
+      }),
+    ).resolves.toEqual({
       user: {
         id: 'user-1',
         email: 'admin@garena.vn',
@@ -204,13 +213,22 @@ describe('AuthService', () => {
         team: null,
         roles: [],
       },
+      session: {
+        isImpersonation: false,
+        impersonatedBy: null,
+      },
     });
   });
 
   it('rejects missing users on /auth/me', async () => {
     prismaService.user.findUnique.mockResolvedValue(null);
 
-    await expect(service.me('missing-user')).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(
+      service.me({
+        userId: 'missing-user',
+        email: 'missing@garena.vn',
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('ensures the super_admin role for dinhphuc.luu@garena.vn', async () => {
@@ -273,5 +291,89 @@ describe('AuthService', () => {
   it('rejects requests without a Google credential', async () => {
     await expect(service.googleLogin({})).rejects.toThrow('Missing Google credential');
     expect(googleTokenVerifierService.verifyIdToken).not.toHaveBeenCalled();
+  });
+
+  it('allows super_admin to impersonate another user', async () => {
+    prismaService.user.findUnique
+      .mockResolvedValueOnce({
+        id: 'target-user',
+        email: 'dev@garena.vn',
+        displayName: 'Target User',
+        avatarUrl: null,
+        status: UserStatus.ACTIVE,
+        team: null,
+        userRoles: [
+          {
+            role: {
+              id: 'role-dev',
+              code: 'dev',
+              name: 'Developer',
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: 'admin-user',
+        email: 'dinhphuc.luu@garena.vn',
+        displayName: 'Dinhphuc Luu',
+      });
+
+    await expect(
+      service.impersonate(
+        {
+          userId: 'admin-user',
+          email: 'dinhphuc.luu@garena.vn',
+          roles: ['super_admin'],
+        },
+        'target-user',
+      ),
+    ).resolves.toEqual({
+      accessToken: 'signed-jwt',
+      tokenType: 'Bearer',
+      user: {
+        id: 'target-user',
+        email: 'dev@garena.vn',
+        displayName: 'Target User',
+        avatarUrl: null,
+        status: UserStatus.ACTIVE,
+        team: null,
+        roles: [
+          {
+            id: 'role-dev',
+            code: 'dev',
+            name: 'Developer',
+          },
+        ],
+      },
+      session: {
+        isImpersonation: true,
+        impersonatedBy: {
+          id: 'admin-user',
+          email: 'dinhphuc.luu@garena.vn',
+          displayName: 'Dinhphuc Luu',
+        },
+      },
+    });
+
+    expect(jwtService.signAsync).toHaveBeenCalledWith({
+      sub: 'target-user',
+      email: 'dev@garena.vn',
+      is_impersonation: true,
+      impersonated_by: 'admin-user',
+      impersonated_by_email: 'dinhphuc.luu@garena.vn',
+    });
+  });
+
+  it('rejects impersonation for non super_admin users', async () => {
+    await expect(
+      service.impersonate(
+        {
+          userId: 'pm-user',
+          email: 'pm@garena.vn',
+          roles: ['pm'],
+        },
+        'target-user',
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

@@ -3,35 +3,12 @@ import { useAuth } from '@/auth/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
 import type { DataProviderError, DataResource } from '@/providers/dataProvider';
 import { useDataProvider } from '@/providers/dataProvider';
-
-type RequestRecord = {
-  id: string;
-  requestCode: string;
-  title: string;
-  requesterTeam: { id: string; code: string; name: string };
-  campaignName?: string | null;
-  requestType: string;
-  priority: string;
-  desiredLiveDate?: string | null;
-  status: string;
-  businessValueScore?: number | null;
-  urgencyScore?: number | null;
-  createdAt: string;
-};
-
-type ProjectRecord = {
-  id: string;
-  projectCode: string;
-  name: string;
-  requesterTeam: { id: string; code: string; name: string };
-  request?: { id: string; requestCode: string; title: string; status: string } | null;
-  pmOwner?: { id: string; email: string; displayName: string } | null;
-  status: string;
-  businessPriority: string;
-  plannedLiveDate?: string | null;
-  actualLiveDate?: string | null;
-  updatedAt?: string;
-};
+import type {
+  ProjectEventRecord,
+  ProjectRecord,
+  RequestAssignmentRecord,
+  RequestRecord,
+} from '@/types/domain';
 
 type AllocationRecord = {
   id: string;
@@ -85,6 +62,8 @@ type LeaveRecord = {
 interface DashboardDataState {
   requests: RequestRecord[];
   projects: ProjectRecord[];
+  projectEvents: ProjectEventRecord[];
+  requestAssignments: RequestAssignmentRecord[];
   allocations: AllocationRecord[];
   incidents: IncidentRecord[];
   leaves: LeaveRecord[];
@@ -96,6 +75,8 @@ interface DashboardDataState {
 const fetchOrder: Array<{ resource: DataResource; permission: string }> = [
   { resource: 'requests', permission: 'requests:view' },
   { resource: 'projects', permission: 'projects:view' },
+  { resource: 'projectEvents', permission: 'projects:view' },
+  { resource: 'requestAssignments', permission: 'projects:view' },
   { resource: 'allocations', permission: 'allocations:view' },
   { resource: 'incidents', permission: 'incidents:view' },
   { resource: 'leaves', permission: 'leaves:view' },
@@ -108,6 +89,8 @@ export function useDashboardData(): DashboardDataState {
   const [state, setState] = useState<DashboardDataState>({
     requests: [],
     projects: [],
+    projectEvents: [],
+    requestAssignments: [],
     allocations: [],
     incidents: [],
     leaves: [],
@@ -139,6 +122,8 @@ export function useDashboardData(): DashboardDataState {
     const nextState: Omit<DashboardDataState, 'loading' | 'error' | 'refresh'> = {
       requests: [],
       projects: [],
+      projectEvents: [],
+      requestAssignments: [],
       allocations: [],
       incidents: [],
       leaves: [],
@@ -158,6 +143,14 @@ export function useDashboardData(): DashboardDataState {
 
       if (result.value.resource === 'projects') {
         nextState.projects = result.value.data as ProjectRecord[];
+      }
+
+      if (result.value.resource === 'projectEvents') {
+        nextState.projectEvents = result.value.data as ProjectEventRecord[];
+      }
+
+      if (result.value.resource === 'requestAssignments') {
+        nextState.requestAssignments = result.value.data as RequestAssignmentRecord[];
       }
 
       if (result.value.resource === 'allocations') {
@@ -190,4 +183,3 @@ export function useDashboardData(): DashboardDataState {
     refresh,
   };
 }
-

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -15,12 +15,15 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useAuth } from '@/auth/useAuth';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { useReferenceData } from '@/hooks/useReferenceData';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDate, toDateInputValue, toIsoString } from '@/utils/format';
 import { leaveTypeOptions } from '@/utils/options';
 
@@ -56,7 +59,16 @@ export default function LeavesPage() {
   const [editingRecord, setEditingRecord] = useState<LeaveRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm();
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'leaves-visible-filters',
+    ['memberId', 'leaveType'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'leaves-visible-columns',
+    ['member', 'leaveType', 'startDate', 'endDate', 'note'],
+  );
 
   const table = useCrudTable<LeaveRecord>({
     resource: 'leaves',
@@ -96,6 +108,126 @@ export default function LeavesPage() {
     ],
     [canDelete, canUpdate],
   );
+
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
+  );
+
+  const exportColumns = useMemo<CsvColumnDefinition<LeaveRecord>[]>(
+    () => [
+      { key: 'member', label: 'Member', getValue: (record) => record.member.displayName },
+      { key: 'leaveType', label: 'Leave Type', getValue: (record) => record.leaveType },
+      { key: 'startDate', label: 'Start Date', getValue: (record) => formatDate(record.startDate) },
+      { key: 'endDate', label: 'End Date', getValue: (record) => formatDate(record.endDate) },
+      { key: 'note', label: 'Note', getValue: (record) => record.note ?? '' },
+    ],
+    [],
+  );
+
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'memberId',
+        label: 'Member',
+        node: (
+          <Select
+            allowClear
+            placeholder="Member"
+            options={userOptions}
+            style={{ width: 220 }}
+            value={filterValues.memberId as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, memberId: value }))}
+          />
+        ),
+      },
+      {
+        key: 'leaveType',
+        label: 'Leave Type',
+        node: (
+          <Select
+            allowClear
+            placeholder="Leave type"
+            options={leaveTypeOptions}
+            style={{ width: 180 }}
+            value={filterValues.leaveType as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, leaveType: value }))}
+          />
+        ),
+      },
+      {
+        key: 'leaveFrom',
+        label: 'Leave From',
+        node: (
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={((filterValues.leaveRange as { from?: string } | undefined)?.from ?? '') as string}
+            onChange={(event) =>
+              setFilterValues((current) => ({
+                ...current,
+                leaveRange: {
+                  ...(current.leaveRange as Record<string, unknown> | undefined),
+                  from: event.target.value || undefined,
+                },
+              }))
+            }
+          />
+        ),
+      },
+      {
+        key: 'leaveTo',
+        label: 'Leave To',
+        node: (
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={((filterValues.leaveRange as { to?: string } | undefined)?.to ?? '') as string}
+            onChange={(event) =>
+              setFilterValues((current) => ({
+                ...current,
+                leaveRange: {
+                  ...(current.leaveRange as Record<string, unknown> | undefined),
+                  to: event.target.value || undefined,
+                },
+              }))
+            }
+          />
+        ),
+      },
+    ],
+    [filterValues, userOptions],
+  );
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+
+    try {
+      const result = await table.provider.getList<LeaveRecord>({
+        resource: 'leaves',
+        pagination: { current: 1, pageSize: 500 },
+        filters: table.filters,
+        sort: table.sorter.field
+          ? {
+              field: String(table.sorter.field),
+              order: table.sorter.order ?? undefined,
+            }
+          : undefined,
+      });
+
+      const selectedColumns = exportColumns.filter((column) => visibleColumnKeys.includes(column.key));
+      downloadCsv(buildCsvFileName('leaves'), selectedColumns, result.data);
+      message.success('Leaves exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export leaves.');
+    } finally {
+      setExporting(false);
+    }
+  }, [exportColumns, message, table.filters, table.provider, table.sorter.field, table.sorter.order, visibleColumnKeys]);
 
   function openCreateDrawer() {
     setEditingRecord(null);
@@ -174,63 +306,25 @@ export default function LeavesPage() {
           </Space>
         }
         filters={
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder="Member"
-              options={userOptions}
-              style={{ width: 220 }}
-              value={filterValues.memberId as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, memberId: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Leave type"
-              options={leaveTypeOptions}
-              style={{ width: 180 }}
-              value={filterValues.leaveType as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, leaveType: value }))}
-            />
-            <Input
-              type="date"
-              style={{ width: 150 }}
-              value={((filterValues.leaveRange as { from?: string } | undefined)?.from ?? '') as string}
-              onChange={(event) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  leaveRange: {
-                    ...(current.leaveRange as Record<string, unknown> | undefined),
-                    from: event.target.value || undefined,
-                  },
-                }))
-              }
-            />
-            <Input
-              type="date"
-              style={{ width: 150 }}
-              value={((filterValues.leaveRange as { to?: string } | undefined)?.to ?? '') as string}
-              onChange={(event) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  leaveRange: {
-                    ...(current.leaveRange as Record<string, unknown> | undefined),
-                    to: event.target.value || undefined,
-                  },
-                }))
-              }
-            />
-            <Button type="primary" onClick={() => table.setFilters(filterValues)}>
-              Apply Filters
-            </Button>
-            <Button
-              onClick={() => {
-                setFilterValues({});
-                table.setFilters({});
-              }}
-            >
-              Reset
-            </Button>
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onApply={() => table.setFilters(filterValues)}
+            onReset={() => {
+              setFilterValues({});
+              table.setFilters({});
+            }}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={columns.map((column) => ({
+              key: String(column.key ?? ''),
+              label: typeof column.title === 'string' ? column.title : String(column.key ?? ''),
+              alwaysVisible: String(column.key ?? '') === 'actions',
+            }))}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -248,7 +342,7 @@ export default function LeavesPage() {
         ) : null}
         <Table<LeaveRecord>
           rowKey="id"
-          columns={columns}
+          columns={visibleColumns}
           dataSource={table.rows}
           loading={table.loading}
           onChange={table.handleTableChange}

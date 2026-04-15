@@ -15,3 +15,11 @@ export async function fetchCurrentUserRequest(): Promise<MeResponse> {
   const response = await apiClient.get<ApiSuccessResponse<MeResponse>>('/auth/me');
   return response.data.data;
 }
+
+export async function impersonateUserRequest(userId: string): Promise<LoginResponse> {
+  const response = await apiClient.post<ApiSuccessResponse<LoginResponse>>(
+    `/auth/impersonate/${userId}`,
+  );
+
+  return response.data.data;
+}

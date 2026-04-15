@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -18,12 +18,16 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { PermissionBoundary } from '@/components/PermissionBoundary';
+import { ListToolbar } from '@/components/table/ListToolbar';
+import { ProjectPicker } from '@/components/ProjectPicker';
 import { ResourcePageLayout } from '@/components/ResourcePageLayout';
 import { useAuth } from '@/auth/useAuth';
 import { usePageTitle } from '@/hooks/use-page-title';
 import { usePermissions } from '@/hooks/usePermissions';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useCrudTable } from '@/hooks/useCrudTable';
 import { useReferenceData } from '@/hooks/useReferenceData';
+import { buildCsvFileName, downloadCsv, type CsvColumnDefinition } from '@/utils/csv';
 import { formatDateTime } from '@/utils/format';
 import { artifactTypeOptions } from '@/utils/options';
 
@@ -68,7 +72,16 @@ export default function ArtifactsPage() {
   const [previewRecord, setPreviewRecord] = useState<ArtifactRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm();
+  const [visibleFilterKeys, setVisibleFilterKeys] = usePersistentState<string[]>(
+    'artifacts-visible-filters',
+    ['projectId', 'artifactType', 'isFinal'],
+  );
+  const [visibleColumnKeys, setVisibleColumnKeys] = usePersistentState<string[]>(
+    'artifacts-visible-columns',
+    ['artifactType', 'title', 'project', 'isFinal', 'createdAt'],
+  );
 
   const table = useCrudTable<ArtifactRecord>({
     resource: 'artifacts',
@@ -136,6 +149,112 @@ export default function ArtifactsPage() {
     ],
     [canDelete, canUpdate],
   );
+
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter((column) => {
+        const key = String(column.key ?? '');
+        return key === 'actions' || visibleColumnKeys.includes(key);
+      }),
+    [columns, visibleColumnKeys],
+  );
+
+  const exportColumns = useMemo<CsvColumnDefinition<ArtifactRecord>[]>(
+    () => [
+      { key: 'artifactType', label: 'Type', getValue: (record) => record.artifactType },
+      { key: 'title', label: 'Title', getValue: (record) => record.title },
+      {
+        key: 'project',
+        label: 'Project',
+        getValue: (record) => `${record.project.projectCode} · ${record.project.name}`,
+      },
+      { key: 'isFinal', label: 'Final', getValue: (record) => (record.isFinal ? 'Final' : 'Draft') },
+      { key: 'createdAt', label: 'Created At', getValue: (record) => formatDateTime(record.createdAt) },
+    ],
+    [],
+  );
+
+  const filterDefinitions = useMemo(
+    () => [
+      {
+        key: 'projectId',
+        label: 'Project',
+        node: (
+          <ProjectPicker
+            allowClear
+            placeholder="Project"
+            options={projectOptions}
+            style={{ width: 220 }}
+            value={filterValues.projectId as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, projectId: value }))}
+          />
+        ),
+      },
+      {
+        key: 'artifactType',
+        label: 'Type',
+        node: (
+          <Select
+            allowClear
+            placeholder="Type"
+            options={artifactTypeOptions}
+            style={{ width: 170 }}
+            value={filterValues.artifactType as string | undefined}
+            onChange={(value) => setFilterValues((current) => ({ ...current, artifactType: value }))}
+          />
+        ),
+      },
+      {
+        key: 'isFinal',
+        label: 'Final State',
+        node: (
+          <Select
+            allowClear
+            placeholder="Final state"
+            options={[
+              { label: 'Final', value: 'true' },
+              { label: 'Draft', value: 'false' },
+            ]}
+            style={{ width: 160 }}
+            value={typeof filterValues.isFinal === 'boolean' ? String(filterValues.isFinal) : undefined}
+            onChange={(value) =>
+              setFilterValues((current) => ({
+                ...current,
+                isFinal: value === undefined ? undefined : value === 'true',
+              }))
+            }
+          />
+        ),
+      },
+    ],
+    [filterValues, projectOptions],
+  );
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+
+    try {
+      const result = await table.provider.getList<ArtifactRecord>({
+        resource: 'artifacts',
+        pagination: { current: 1, pageSize: 500 },
+        filters: table.filters,
+        sort: table.sorter.field
+          ? {
+              field: String(table.sorter.field),
+              order: table.sorter.order ?? undefined,
+            }
+          : undefined,
+      });
+
+      const selectedColumns = exportColumns.filter((column) => visibleColumnKeys.includes(column.key));
+      downloadCsv(buildCsvFileName('artifacts'), selectedColumns, result.data);
+      message.success('Artifacts exported.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Unable to export artifacts.');
+    } finally {
+      setExporting(false);
+    }
+  }, [exportColumns, message, table.filters, table.provider, table.sorter.field, table.sorter.order, visibleColumnKeys]);
 
   function openCreateDrawer() {
     setEditingRecord(null);
@@ -217,51 +336,25 @@ export default function ArtifactsPage() {
           </Space>
         }
         filters={
-          <Space wrap>
-            <Select
-              allowClear
-              placeholder="Project"
-              options={projectOptions}
-              style={{ width: 220 }}
-              value={filterValues.projectId as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, projectId: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Type"
-              options={artifactTypeOptions}
-              style={{ width: 170 }}
-              value={filterValues.artifactType as string | undefined}
-              onChange={(value) => setFilterValues((current) => ({ ...current, artifactType: value }))}
-            />
-            <Select
-              allowClear
-              placeholder="Final state"
-              options={[
-                { label: 'Final', value: 'true' },
-                { label: 'Draft', value: 'false' },
-              ]}
-              style={{ width: 160 }}
-              value={typeof filterValues.isFinal === 'boolean' ? String(filterValues.isFinal) : undefined}
-              onChange={(value) =>
-                setFilterValues((current) => ({
-                  ...current,
-                  isFinal: value === undefined ? undefined : value === 'true',
-                }))
-              }
-            />
-            <Button type="primary" onClick={() => table.setFilters(filterValues)}>
-              Apply Filters
-            </Button>
-            <Button
-              onClick={() => {
-                setFilterValues({});
-                table.setFilters({});
-              }}
-            >
-              Reset
-            </Button>
-          </Space>
+          <ListToolbar
+            filterDefinitions={filterDefinitions}
+            visibleFilterKeys={visibleFilterKeys}
+            onVisibleFilterKeysChange={setVisibleFilterKeys}
+            onApply={() => table.setFilters(filterValues)}
+            onReset={() => {
+              setFilterValues({});
+              table.setFilters({});
+            }}
+            onExport={() => void handleExport()}
+            exporting={exporting}
+            columnDefinitions={columns.map((column) => ({
+              key: String(column.key ?? ''),
+              label: typeof column.title === 'string' ? column.title : String(column.key ?? ''),
+              alwaysVisible: String(column.key ?? '') === 'actions',
+            }))}
+            visibleColumnKeys={visibleColumnKeys}
+            onVisibleColumnKeysChange={setVisibleColumnKeys}
+          />
         }
       >
         {table.error ? (
@@ -279,7 +372,7 @@ export default function ArtifactsPage() {
         ) : null}
         <Table<ArtifactRecord>
           rowKey="id"
-          columns={columns}
+          columns={visibleColumns}
           dataSource={table.rows}
           loading={table.loading}
           onChange={table.handleTableChange}
@@ -308,7 +401,7 @@ export default function ArtifactsPage() {
       >
         <Form form={form} layout="vertical" onFinish={(values) => void handleSubmit(values)}>
           <Form.Item label="Project" name="projectId" rules={[{ required: true }]}>
-            <Select options={projectOptions} />
+            <ProjectPicker options={projectOptions} placeholder="Select project" />
           </Form.Item>
           <Form.Item label="Artifact type" name="artifactType" rules={[{ required: true }]}>
             <Select options={artifactTypeOptions} />

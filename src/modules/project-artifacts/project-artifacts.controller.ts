@@ -6,13 +6,21 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOkResponse,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { CreateProjectArtifactDto } from './dto/create-project-artifact.dto';
+import { ProjectArtifactQueryDto } from './dto/project-artifact-query.dto';
 import { UpdateProjectArtifactDto } from './dto/update-project-artifact.dto';
 import { ProjectArtifactsService } from './project-artifacts.service';
 
@@ -33,9 +41,17 @@ export class ProjectArtifactsController {
 
   @Get()
   @RequirePermission('artifacts:view')
+  @ApiQuery({ name: 'projectId', required: false })
+  @ApiQuery({ name: 'uploadedBy', required: false })
+  @ApiQuery({ name: 'artifactType', required: false })
+  @ApiQuery({ name: 'isFinal', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortOrder', required: false })
   @ApiOkResponse({ description: 'List project artifacts.' })
-  findAll() {
-    return this.projectArtifactsService.findAll();
+  findAll(@Query() query: ProjectArtifactQueryDto) {
+    return this.projectArtifactsService.findAll(query);
   }
 
   @Get(':id')
@@ -60,4 +76,3 @@ export class ProjectArtifactsController {
     return this.projectArtifactsService.remove(id);
   }
 }
-

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma, ProjectArtifact } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectArtifactDto } from './dto/create-project-artifact.dto';
+import { ProjectArtifactQueryDto } from './dto/project-artifact-query.dto';
 import { UpdateProjectArtifactDto } from './dto/update-project-artifact.dto';
 
 const artifactInclude = {
@@ -26,6 +27,13 @@ type ArtifactDetail = Prisma.ProjectArtifactGetPayload<{
   include: typeof artifactInclude;
 }>;
 
+const sortableArtifactFields = new Set([
+  'createdAt',
+  'updatedAt',
+  'title',
+  'artifactType',
+]);
+
 @Injectable()
 export class ProjectArtifactsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -42,13 +50,44 @@ export class ProjectArtifactsService {
     return { data: this.toResponse(artifact) };
   }
 
-  async findAll() {
-    const artifacts = await this.prisma.projectArtifact.findMany({
-      include: artifactInclude,
-      orderBy: [{ createdAt: 'desc' }],
-    });
+  async findAll(query: ProjectArtifactQueryDto) {
+    const page = this.parsePositiveInt(query.page, 1);
+    const pageSize = this.clampPageSize(this.parsePositiveInt(query.pageSize, 20));
+    const sortBy = this.resolveSortBy(query.sortBy);
+    const sortOrder = this.resolveSortOrder(query.sortOrder);
 
-    return { data: artifacts.map((artifact) => this.toResponse(artifact)) };
+    const where: Prisma.ProjectArtifactWhereInput = {
+      projectId: this.toOptionalString(query.projectId),
+      uploadedBy: this.toOptionalString(query.uploadedBy),
+      artifactType: this.toOptionalString(query.artifactType),
+      ...(this.toOptionalBoolean(query.isFinal) === undefined
+        ? {}
+        : { isFinal: this.toOptionalBoolean(query.isFinal) }),
+    };
+
+    const [artifacts, total] = await this.prisma.$transaction([
+      this.prisma.projectArtifact.findMany({
+        where,
+        include: artifactInclude,
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.projectArtifact.count({ where }),
+    ]);
+
+    return {
+      data: artifacts.map((artifact) => this.toResponse(artifact)),
+      meta: {
+        page,
+        pageSize,
+        total,
+        sortBy,
+        sortOrder,
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -170,5 +209,55 @@ export class ProjectArtifactsService {
       updatedAt: artifact.updatedAt,
     };
   }
-}
 
+  private toOptionalString(value?: string): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private toOptionalBoolean(value?: string): boolean | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') {
+      return true;
+    }
+
+    if (normalized === 'false') {
+      return false;
+    }
+
+    return undefined;
+  }
+
+  private parsePositiveInt(value: string | undefined, fallback: number): number {
+    if (!value) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private clampPageSize(value: number): number {
+    return Math.min(Math.max(value, 1), 100);
+  }
+
+  private resolveSortBy(value?: string): keyof Prisma.ProjectArtifactOrderByWithRelationInput {
+    if (value && sortableArtifactFields.has(value)) {
+      return value as keyof Prisma.ProjectArtifactOrderByWithRelationInput;
+    }
+
+    return 'createdAt';
+  }
+
+  private resolveSortOrder(value?: string): Prisma.SortOrder {
+    return value?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+  }
+}

@@ -15,7 +15,11 @@ export class CreateProjectDto {
   @MaxLength(100)
   projectCode!: string;
 
-  @ApiPropertyOptional({ example: 'request_cuid_here' })
+  @ApiPropertyOptional({
+    example: 'request_cuid_here',
+    description:
+      'Compatibility input alias. If provided, the backend will attach this request to the project via requests.project_id.',
+  })
   @IsOptional()
   @IsString()
   requestId?: string;
@@ -144,4 +148,3 @@ export class CreateProjectDto {
   @IsString()
   notes?: string;
 }
-
